@@ -145,6 +145,27 @@ describe("parseWebhook: event", () => {
     expect(signed(event(anonymous))).toMatchObject({ ok: false, status: 400 });
   });
 
+  it.each([
+    [
+      "platform.sending.paused",
+      {
+        object: {
+          platform: "email",
+          reason: "reputation_policy",
+          scope: "organization",
+        },
+        projectId: PROJECT_ID,
+      },
+    ],
+    ["external-webhook.received", { rawRequestBase64: "e30=" }],
+  ])("acknowledges %s, which has no data.object.id", (type, data) => {
+    expect(signed(event(receivedMessage(), { type, data }))).toMatchObject({
+      ok: false,
+      status: 200,
+      acknowledged: true,
+    });
+  });
+
   it("answers 400 for message.received without data.object.platform", () => {
     const { platform: _, ...unplatformed } = receivedMessage();
     expect(signed(event(unplatformed))).toMatchObject({

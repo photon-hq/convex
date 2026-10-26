@@ -47,7 +47,8 @@ export type ParseOutcome =
   | { ok: false; status: number; reason: string }
   // A well-formed delivery we deliberately acknowledge without storing (an
   // event type other than `message.received`, or a message we can't route).
-  // Retrying won't help, so it must be a 200 or Photon redelivers it.
+  // Nothing about the delivery is wrong, so it must not show up as a failed
+  // delivery.
   | { ok: false; status: 200; reason: string; acknowledged: true };
 
 const SIGNATURE_INVALID_STATUS = 401;
@@ -109,7 +110,7 @@ export function parseWebhook(input: {
     return {
       ok: false,
       status: SERVER_ERROR_STATUS,
-      reason: "webhook secret is not a valid whsec_ signing secret",
+      reason: "webhook secret cannot be decoded as a signing secret",
     };
   }
 
@@ -141,13 +142,18 @@ export function parseWebhook(input: {
     );
   }
   const type = asString(event.type);
-  const object = asObject(asObject(event.data)?.object);
-  const messageId = asString(object?.id);
-  if (!(type && object && messageId)) {
-    return malformed("missing type or data.object.id");
+  if (!type) {
+    return malformed("missing type");
   }
+  // Checked before `data.object.id`: some event types carry no object id, or no
+  // object at all, and they are still well-formed.
   if (type !== "message.received") {
     return acknowledged(`ignored event type ${type}`);
+  }
+  const object = asObject(asObject(event.data)?.object);
+  const messageId = asString(object?.id);
+  if (!(object && messageId)) {
+    return malformed("missing data.object.id");
   }
   const platform = asString(object.platform);
   if (!platform) {
