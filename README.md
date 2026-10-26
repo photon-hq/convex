@@ -37,7 +37,7 @@ app.use(photon);
 export default app;
 ```
 
-In the [Photon dashboard](https://dashboard.photon.codes), open your project's
+In the [Photon Beta dashboard](https://app.beta.photon.codes), open your project's
 **Webhooks** page and add a destination:
 
 - URL: `https://<deployment>.convex.site/photon/webhook`
