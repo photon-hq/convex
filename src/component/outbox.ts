@@ -11,13 +11,10 @@ import {
 import { isReply } from "./pipeline.js";
 
 /**
- * The outbound half: a durable outbox keyed by deterministic idempotency keys.
+ * The outbound half: a durable outbox, one row per action.
  *
- * Every row carries an `idempotencyKey` derived from `(turnId, seq)`, so
- * re-queuing the same logical send — whether ours or the scheduler's —
- * collapses onto the existing row instead of creating a second one.
- *
- * `sendMessage` and `markMessageRead` also send that key as the request's
+ * Every row carries an `idempotencyKey` derived from `(turnId, seq)`.
+ * `sendMessage` and `markMessageRead` send it as the request's
  * `idempotency-key` header, and every retry of a row reuses it. So when a
  * request succeeded but its response was lost, the retry gets the original
  * result back instead of sending the message a second time.
@@ -75,9 +72,9 @@ const isControlAction = (kind: Doc<"outbox">["kind"]): boolean =>
   kind === "markMessageRead" || kind === "setSpaceTyping";
 
 /**
- * Pacing separates consecutive *messages* so a multi-part reply doesn't land
- * as a wall of text. It must never delay the first one: that is pure latency
- * before the user sees anything.
+ * Pacing delays each message after the first one in a turn by `pacingMs`,
+ * counted from when it is queued. It must never delay the first one: that is
+ * pure latency before the user sees anything.
  *
  * Deliberately counted over message-bearing rows only, not `seq`. Control
  * actions (read receipts, typing) occupy sequence numbers too, so keying off
@@ -119,8 +116,9 @@ export const enqueue = mutation({
     telegram: v.optional(v.any()),
     targetMessageId: v.optional(v.string()),
     pacingMs: v.optional(v.number()),
-    // Photon API credentials. With `projectId` and `apiKey`, they replace the
-    // stored ones when different; without, the stored ones are used.
+    // Photon API credentials. Given `projectId` and `apiKey`, the three
+    // together replace the stored ones when different, so an omitted `baseUrl`
+    // clears the stored one; without them, the stored ones are used.
     projectId: v.optional(v.string()),
     apiKey: v.optional(v.string()),
     baseUrl: v.optional(v.string()),
@@ -151,8 +149,7 @@ export const enqueue = mutation({
       : [];
     const seq = priorForTurn.length;
     const now = Date.now();
-    // Deterministic: the same (turn, seq) always yields the same key, which
-    // is what makes a replayed send collapse instead of duplicating.
+    // One key per row; every retry of the row reuses it.
     const idempotencyKey = `${args.turnId ?? `${args.spaceId}:${now}`}#${seq}`;
 
     const existing = await ctx.db
@@ -320,9 +317,9 @@ export const settle = internalMutation({
         ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
       });
 
-      // A reply reached the user, so this turn's inherited messages are finally
-      // spent. Doing it here rather than when the handler finishes is what
-      // makes the pipeline lossless: until something actually ships, every
+      // The API accepted a reply, so this turn's inherited messages are
+      // finally spent. Doing it here rather than when the handler finishes is
+      // what makes the pipeline lossless: until a reply is accepted, every
       // message stays recoverable by the next turn.
       if (isReply(row) && row.turnId) {
         const inherited = await ctx.db
@@ -345,9 +342,9 @@ export const settle = internalMutation({
       return null;
     }
 
-    // Same idempotency key on the retry, so a request that actually landed
-    // before the error is answered with its original result instead of being
-    // carried out twice.
+    // Same idempotency key on the retry, so a `sendMessage` or
+    // `markMessageRead` that actually landed before the error is answered with
+    // its original result instead of being carried out twice.
     const delay = BASE_RETRY_DELAY_MS * RETRY_BACKOFF_FACTOR ** row.attempts;
     const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
       rowId: row._id,

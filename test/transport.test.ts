@@ -194,7 +194,10 @@ describe("requests", () => {
       url: `${BASE_URL}/v1/projects/${PROJECT_ID}/spaces/${SPACE_ID}/typing`,
       method: "POST",
       headers: { authorization: `Bearer ${API_KEY}` },
-      body: { senderId: AGENT_ID, typing: true },
+    });
+    expect(photonApi.requests[0]?.body).toEqual({
+      senderId: AGENT_ID,
+      typing: true,
     });
     expect(photonApi.requests[0]?.headers).not.toHaveProperty(
       "idempotency-key"
@@ -397,6 +400,8 @@ describe("credentials", () => {
     expect(await config(t)).toMatchObject([credentials]);
     expect(await config(t)).toHaveLength(1);
 
+    // No base URL from the shell either: the stored one must be cleared.
+    vi.stubEnv("PHOTON_BASE_URL", undefined);
     const rotated = client(t, {
       projectId: PROJECT_ID,
       apiKey: "pho_sk_rotated",

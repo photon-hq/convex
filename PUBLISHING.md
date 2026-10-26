@@ -46,6 +46,9 @@ the `npm` environment, and the workflow's `id-token: write` permission lets the
 runner mint a short-lived credential to exchange at publish time. npm attaches
 build provenance automatically as a side effect.
 
+This is also what sidesteps the account's `auth-and-writes` two-factor setting,
+which otherwise stops every publish for a one-time password.
+
 The trusted publisher on npmjs.com: organization `photon-hq`, repository
 `convex`, workflow filename `release.yml`, environment `npm`, with **npm
 publish** allowed — a new configuration allows only `npm stage publish`, and
@@ -56,9 +59,6 @@ The `npm` GitHub environment is what limits publishing to `main`: npm's trust
 has no branch field, so without it anyone who can push a branch could publish
 from an edited `release.yml`. Its deployment branches are *Selected branches
 and tags*, with only `main`.
-
-This is also what sidesteps the account's `auth-and-writes` two-factor setting,
-which otherwise stops every publish for a one-time password.
 
 Two consequences worth knowing:
 

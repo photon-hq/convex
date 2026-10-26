@@ -184,7 +184,7 @@ export const cancelCurrentTurn = async (
 
   const turnId = inflight.turnId;
   if (turnId) {
-    // A turn counts as answered only if a reply actually reached the user.
+    // A turn counts as answered only if the API accepted a reply.
     // Checked before cancelling, though `sent` rows are unaffected by that.
     const queued = await ctx.db
       .query("outbox")

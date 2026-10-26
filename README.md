@@ -1,9 +1,8 @@
 # @photon-ai/convex
 
 A [Convex](https://convex.dev) component for [Photon](https://photon.codes) Beta
-(2.0): receive messages on every Beta messaging platform — iMessage, SMS,
-WhatsApp, WhatsApp Business, Email and Telegram — and reply through the Photon
-API.
+(2.0): receive messages from Beta messaging platforms such as iMessage, SMS,
+WhatsApp Business, Email and Telegram, and reply through the Photon API.
 
 > Using Photon Stable? Its component is `@spectrum-ts/convex`, in
 > [photon-hq/spectrum-convex](https://github.com/photon-hq/spectrum-convex). It
@@ -16,10 +15,8 @@ message is already durable. Everything after that runs on Convex's scheduler —
 your handler, and an outbox that sends replies through the Photon API with
 retries.
 
-It also ships the production pipeline from Photon's
-[architecture guide](https://photon.codes/docs/best-practices/architecture) —
-burst handling, in-flight cancellation, carry-forward, and paced sends — rather
-than leaving you to rebuild it.
+It also handles bursts of messages: a newer message can cancel the turn in
+progress and carry its messages forward, and replies can be paced.
 
 ## Install
 
@@ -138,13 +135,20 @@ new PhotonComponent(components.photon, {
   onTurn: internal.agent.respond,
   mode: "collapse",   // default is "immediate"
   debounceMs: 0,      // optional extra settling window, collapse mode only
-  pacingMs: 600,      // delay between consecutive messages of one turn
+  pacingMs: 600,      // delay before each message after a turn's first
 });
 ```
 
 `debounceMs` is a latency cost on every reply, so it defaults to 0 — in
 collapse mode, cancellation already absorbs most bursts on its own, because a
 follow-up usually arrives while the previous reply is still in flight.
+
+Call `completeTurn` when the handler finishes. In collapse mode, the messages
+of a turn that never completes are carried into the next turn even if it
+replied.
+
+`pacingMs` delays each message after the first one in a turn, counted from when
+it is queued; read receipts and reactions are never delayed.
 
 ### Guarantees in both modes
 
@@ -153,16 +157,15 @@ follow-up usually arrives while the previous reply is still in flight.
   and `space.typing.update` content). Otherwise a bot replies to the read
   receipt for its own last message and echoes forever. Every other content type
   starts a turn, including ones this release doesn't know.
-- **Sends are deduped end to end.** Each outbox row carries an
-  `idempotencyKey` derived from `(turnId, seq)`, so the same logical send is
-  never queued twice, and `sendMessage` and `markMessageRead` send it as the
+- **Retries don't send twice.** Each outbox row keeps one `idempotencyKey`
+  across its retries, and `sendMessage` and `markMessageRead` send it as the
   request's `idempotency-key` header. A retry after a lost response gets the
   original result back instead of sending the message a second time.
 - **Messages are never dropped.** One rule governs the pipeline: *a message is
-  spent only when a reply actually reaches the user* — not when it is drained,
-  and not when the handler returns. A handler that has finished has only
-  *queued* its reply; a follow-up moments later can still cancel it. Until a
-  send is confirmed, every message stays recoverable.
+  spent only when the Photon API accepts a reply to it* — not when it is
+  drained, and not when the handler returns. A handler that has finished has
+  only *queued* its reply; a follow-up moments later can still cancel it. Until
+  a reply is accepted, every message stays recoverable.
 
 ## Sending
 
@@ -175,19 +178,21 @@ to the deployment's dashboard can read the API key**.
 |---|---|
 | `photon.sendMessage(ctx, { spaceId, content, turnId?, parentMessageId?, email?, telegram?, pacingMs? })` | `sendMessage` — `content` is the API's send content, e.g. `{ type: "text", format: "plain", text }` or `format: "markdown"`. `parentMessageId` makes it a reply; `email` and `telegram` are the platform options. |
 | `photon.markMessageRead(ctx, { spaceId, turnId })` | `markMessageRead` on the turn's newest message |
-| `ctx.runMutation(components.photon.outbox.enqueue, { spaceId, turnId, kind: "setSpaceTyping" })` | `setSpaceTyping` (typing on). Uses the credentials the last send stored; pass `projectId` and `apiKey` to set them. |
+| `ctx.runMutation(components.photon.outbox.enqueue, { spaceId, turnId, kind: "setSpaceTyping" })` | `setSpaceTyping` (typing on). Uses the credentials the last send stored; to set them, pass `projectId`, `apiKey` and, if you use one, `baseUrl` together. |
 
 Replies are sent as the agent's own user in the space — the `receivedBy` of the
 incoming messages. A space that has never received a message with `receivedBy`
-has no sender, and its sends fail without a request.
+has no sender, and its sends fail without a request, so the component can't
+start a conversation in a new space.
 
-Delivery is retried, with the same idempotency key, after a network error or a
-`408`, `429` or `5xx`: up to 5 attempts, 4 s, 16 s, 64 s and 256 s apart. Any
-other error is final — for example `409 SPACE_NOT_SENDABLE` (SMS and WhatsApp
-don't take replies, and WhatsApp sends only in one-to-one spaces) or `422
+A send is retried after a network error or a `408`, `429` or `5xx`: up to 5
+attempts, 4 s, 16 s, 64 s and 256 s apart. Any other error is final — for
+example `409 SPACE_NOT_SENDABLE` (SMS doesn't take replies) or `422
 OPERATION_UNAVAILABLE` (read receipts and typing are not available on every
-platform or in every space). `listOutbox` shows each row's status and
-`lastError`.
+platform or in every space). `listOutbox` returns a space's outbox rows (50 by
+default) with their `status` and `lastError`. A send queued for a turn that a
+newer message has cancelled is not sent: `sendMessage` returns
+`{ queued: false, reason: "turn-cancelled" }`.
 
 Uploading attachments is not part of this release. Received attachment
 messages are stored and handed to your handler like any other message.
@@ -196,9 +201,9 @@ messages are stored and handed to your handler like any other message.
 
 | Request | Response |
 |---|---|
-| `PHOTON_WEBHOOK_SECRET` missing, or not a `whsec_…` signing secret | `500` |
-| Missing `webhook-*` header, bad signature, or a timestamp more than 5 minutes off | `401` |
-| Signed, but the body is not a JSON object, the `apiVersion` is not one this release reads, `type` or `data.object.id` is missing, or a `message.received` has no `data.object.platform` | `400` |
+| `PHOTON_WEBHOOK_SECRET` missing, or it cannot be decoded as a signing secret | `500` |
+| Missing `webhook-*` header, a signature that doesn't match the secret, or a timestamp more than 5 minutes off | `401` |
+| Signed, but the body is not a JSON object, the `apiVersion` is not one this release reads, `type` is missing, or a `message.received` has no `data.object.id` or `data.object.platform` | `400` |
 | Any event type other than `message.received` | `200`, not stored |
 | A message without `data.object.space.id` | `200`, not stored |
 | A message, or a redelivery of one | `200`, stored once |
@@ -211,8 +216,8 @@ Photon does not retry a `4xx` other than `404`, `408` and `429`; it retries a
 Every event carries the `apiVersion` of the destination that delivered it, and
 a destination's API version is fixed when it is created. This release reads
 **`2026-07-01`** only, and answers any other version with `400`. `2026-07-01`
-is currently Photon's only webhook API version, and still a preview, so its
-event format can still change.
+is currently Photon's only webhook API version, and its status is still
+`preview`, so its event format can still change.
 
 Later releases read the API versions Photon has in their latest or maintenance
 phase: a version is added when Photon promotes it to latest, and removed in the

@@ -443,7 +443,7 @@ describe("pacing", () => {
 });
 
 describe("pacing counts messages, not control actions", () => {
-  it("does not let an auto-markRead push the reply into a paced slot", async () => {
+  it("does not let an auto-markMessageRead push the reply into a paced slot", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
@@ -467,7 +467,7 @@ describe("pacing counts messages, not control actions", () => {
       pacingMs: 600,
     });
 
-    // markRead occupies seq 0, but the reply is still the first *message* of
+    // markMessageRead occupies seq 0, but the reply is still the first *message* of
     // the turn and must not be delayed.
     const jobs = await t.run(
       async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()

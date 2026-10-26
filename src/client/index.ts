@@ -18,10 +18,9 @@ import { parseWebhook } from "../shared/wire.js";
 /**
  * App-facing client for the Photon component.
  *
- * Wraps the component's functions so app code never addresses them directly,
- * and runs in the app's own environment — which is what gives it access to the
- * app's `PHOTON_*` environment variables (a component cannot read the app's
- * env vars).
+ * Wraps the component's functions for app code, and runs in the app's own
+ * environment — which is what gives it access to the app's `PHOTON_*`
+ * environment variables (a component cannot read the app's env vars).
  */
 
 export const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
@@ -141,7 +140,10 @@ export interface PhotonComponentOptions {
    * can call an LLM.
    */
   onTurn?: FunctionReference<"action" | "mutation", "internal" | "public">;
-  /** Delay between consecutive sends in one turn, so replies don't land at once. */
+  /**
+   * Delay before each message after the first one in a turn, counted from
+   * when it is queued. Read receipts and reactions are never delayed.
+   */
   pacingMs?: number;
   /** Photon project id (`pho_prj_…`). Falls back to `process.env.PHOTON_PROJECT_ID`. */
   projectId?: string;

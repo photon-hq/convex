@@ -127,10 +127,10 @@ export default defineSchema({
     .index("by_turn", ["turnId"]),
 
   /**
-   * Outbound actions. `idempotencyKey` is derived deterministically from
-   * `(turnId, seq)`, so a re-queued send lands on the row that already exists
-   * rather than a second one, and it is sent as the request's
-   * `idempotency-key` header (see the note in `outbox.ts`).
+   * Outbound actions. `idempotencyKey` is derived from `(turnId, seq)`;
+   * `sendMessage` and `markMessageRead` send it as the request's
+   * `idempotency-key` header, and retries reuse it (see the note in
+   * `outbox.ts`).
    */
   outbox: defineTable({
     spaceId: v.string(),

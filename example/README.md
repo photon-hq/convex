@@ -32,8 +32,8 @@ and add a webhook destination to your Photon project, with API version
 https://<deployment>.convex.site/photon/webhook
 ```
 
-A local deployment is not reachable from Photon: test deliveries against a
-cloud deployment.
+Photon can't reach a local deployment directly: test deliveries against a
+cloud deployment, or expose the local one through a public HTTPS tunnel.
 
 ## What each file does
 

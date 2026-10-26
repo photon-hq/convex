@@ -5,8 +5,8 @@
 Initial release, for Photon Beta (2.0) only. Photon Stable keeps
 `@spectrum-ts/convex`.
 
-- Receives `message.received` webhooks from every Beta messaging platform,
-  verified with Standard Webhooks, for webhook API version `2026-07-01`.
+- Receives `message.received` webhooks, verified with Standard Webhooks, for
+  webhook API version `2026-07-01`.
 - Durable inbound pipeline: at-least-once dedupe, immediate or collapsed turns,
   and turn cancellation with carry-forward.
 - Sends through the Photon API from the component itself — `sendMessage`,
