@@ -1,0 +1,11 @@
+{
+  "functions": "example/convex",
+  "node": {
+    "externalPackages": [
+      "@photon-ai/advanced-imessage",
+      "nice-grpc",
+      "nice-grpc-common",
+      "@grpc/grpc-js"
+    ]
+  }
+}

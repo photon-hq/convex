@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.convex/
+*.tsbuildinfo
+.env
+.env.local
+
+# npm pack output
+*.tgz

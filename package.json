@@ -1,0 +1,105 @@
+{
+  "name": "@spectrum-ts/convex",
+  "version": "0.1.1",
+  "description": "Convex component for Photon iMessage — durable inbound pipeline, batching, cancellation, and a deduped, paced outbox.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/photon-hq/spectrum-convex.git"
+  },
+  "homepage": "https://photon.codes/spectrum",
+  "bugs": {
+    "url": "https://github.com/photon-hq/spectrum-convex/issues"
+  },
+  "keywords": [
+    "convex",
+    "convex-component",
+    "spectrum",
+    "imessage"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@convex-dev/component-source": "./src/client/index.ts",
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./sender": {
+      "@convex-dev/component-source": "./src/client/sender.ts",
+      "types": "./dist/client/sender.d.ts",
+      "default": "./dist/client/sender.js"
+    },
+    "./test": "./src/test.ts",
+    "./_generated/component": {
+      "types": "./dist/component/_generated/component.d.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./dist/component/_generated/component.d.ts"
+    },
+    "./convex.config": {
+      "@convex-dev/component-source": "./src/component/convex.config.ts",
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    },
+    "./convex.config.js": {
+      "@convex-dev/component-source": "./src/component/convex.config.ts",
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    }
+  },
+  "types": "./dist/client/index.d.ts",
+  "module": "./dist/client/index.js",
+  "scripts": {
+    "predev": "npm run build:codegen",
+    "dev": "convex dev --typecheck-components --live-component-sources --start 'npm run dev:build'",
+    "dev:build": "chokidar 'tsconfig*.json' 'src/**/*.ts' -i '**/*.test.ts' -c 'npm run build:codegen' --initial",
+    "build": "tsc --project tsconfig.build.json",
+    "build:codegen": "convex codegen --component-dir ./src/component && npm run build",
+    "build:clean": "rm -rf dist *.tsbuildinfo && npm run build:codegen",
+    "check": "biome check .",
+    "fix": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc -p example/convex",
+    "prepare": "npm run build",
+    "changeset": "changeset",
+    "version": "changeset version && npm install --package-lock-only",
+    "release": "npm run build && changeset publish"
+  },
+  "dependencies": {
+    "@spectrum-ts/core": "^12.8.0"
+  },
+  "peerDependencies": {
+    "@spectrum-ts/imessage": "^12.7.0",
+    "convex": ">=1.31.0 <2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@spectrum-ts/imessage": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.1",
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^3.0.1",
+    "@edge-runtime/vm": "^5.0.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "@photon-ai/advanced-imessage": "^2.0.2",
+    "@spectrum-ts/imessage": "^12.8.0",
+    "@types/node": "^26.0.1",
+    "chokidar-cli": "^3.0.0",
+    "convex": "^1.44.0",
+    "convex-test": "^0.0.56",
+    "nice-grpc": "^2.1.16",
+    "nice-grpc-common": "^2.0.3",
+    "typescript": "^5.9.0",
+    "ultracite": "7.8.4",
+    "vitest": "^4.1.9"
+  },
+  "license": "MIT"
+}
