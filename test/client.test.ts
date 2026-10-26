@@ -1,25 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { pickChain } from "../src/client/index.js";
+import { pickTurn } from "../src/client/index.js";
 
 /**
  * Regression guard for a bug that unit tests missed and a live deployment
- * caught: handlers are naturally called as `spectrum.isCancelled(ctx, args)`
- * with the *whole* batch, but Convex validators reject unknown fields. If the
- * client stops narrowing, every real batch handler throws
+ * caught: handlers are naturally called as `photon.isCancelled(ctx, args)`
+ * with the *whole* turn, but Convex validators reject unknown fields. If the
+ * client stops narrowing, every real turn handler throws
  * `ArgumentValidationError` at runtime.
  */
-describe("pickChain", () => {
-  it("drops batch fields the component's validators would reject", () => {
-    const batch = {
+describe("pickTurn", () => {
+  it("drops turn fields the component's validators would reject", () => {
+    const turn = {
       spaceId: "chat-1",
-      chainId: "chat-1:123:abc",
-      messages: [{ messageId: "m1", content: { type: "text", text: "hi" } }],
+      turnId: "chat-1:123:abc",
+      messages: [
+        {
+          id: "m1",
+          content: { type: "text", format: "plain", text: "hi" },
+        },
+      ],
       carried: [],
     };
-    expect(pickChain(batch)).toEqual({
+    expect(pickTurn(turn)).toEqual({
       spaceId: "chat-1",
-      chainId: "chat-1:123:abc",
+      turnId: "chat-1:123:abc",
     });
-    expect(Object.keys(pickChain(batch))).toHaveLength(2);
+    expect(Object.keys(pickTurn(turn))).toHaveLength(2);
   });
 });

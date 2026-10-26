@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../src/component/_generated/api.js";
+import { api, internal } from "../src/component/_generated/api.js";
 import schema from "../src/component/schema.js";
 
 /**
@@ -9,7 +9,7 @@ import schema from "../src/component/schema.js";
  *
  * These target the rules that are easy to get subtly wrong and expensive to
  * discover in production: at-least-once dedupe, the debounce reset, the
- * carry-forward rule, and the per-chain (not per-space) cancellation check.
+ * carry-forward rule, and the per-turn (not per-space) cancellation check.
  */
 
 // `import.meta.glob` is how convex-test discovers the function modules. The
@@ -46,8 +46,7 @@ const message = (overrides: Record<string, unknown> = {}) => ({
   spaceId: "chat-1",
   messageId: "m1",
   platform: "imessage",
-  senderId: "u1",
-  content: { type: "text", text: "hey" },
+  message: { content: { type: "text", format: "plain", text: "hey" } },
   mode: "collapse" as const,
   ...overrides,
 });
@@ -81,13 +80,13 @@ describe("inbound.enqueue", () => {
     expect(stored).toHaveLength(1);
   });
 
-  it("keeps a learned phone when a later delivery omits it", async () => {
+  it("keeps a learned senderId when a later delivery omits it", async () => {
     const t = setup();
-    await t.mutation(api.inbound.enqueue, message({ phone: "+15551234567" }));
+    await t.mutation(api.inbound.enqueue, message({ senderId: "agent-1" }));
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
 
     const space = await t.query(api.inbound.getSpace, { spaceId: "chat-1" });
-    expect(space?.phone).toBe("+15551234567");
+    expect(space?.senderId).toBe("agent-1");
   });
 });
 
@@ -111,18 +110,18 @@ describe("debounce and flush", () => {
 
     stored = await t.query(api.inbound.listMessages, { spaceId: "chat-1" });
     expect(stored).toHaveLength(3);
-    // One flush drained the whole burst into a single chain.
+    // One flush drained the whole burst into a single turn.
     expect(stored.every((m) => m.status === "drained")).toBe(true);
   });
 });
 
 describe("cancellation and carry-forward", () => {
-  it("carries drained messages forward when a chain is superseded", async () => {
+  it("carries drained messages forward when a turn is superseded", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
 
-    // A new message lands mid-turn: the chain is cancelled and its drained
+    // A new message lands mid-turn: the turn is cancelled and its drained
     // rows must not be lost.
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
 
@@ -140,13 +139,13 @@ describe("cancellation and carry-forward", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
     await settle(t);
 
-    // The consuming chain claims the row; it survives until that chain answers,
+    // The consuming turn claims the row; it survives until that turn answers,
     // so a second supersession can still hand it on.
     const carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
     );
     expect(carried).toHaveLength(1);
-    expect(carried[0]?.chainId).toBeDefined();
+    expect(carried[0]?.turnId).toBeDefined();
   });
 
   it("keeps carried messages until a reply actually ships", async () => {
@@ -156,16 +155,16 @@ describe("cancellation and carry-forward", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
     await settle(t);
 
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
     // Handler finished — but its reply is only queued, and a supersession can
     // still cancel it, so the inherited message must survive.
-    await t.mutation(api.pipeline.completeChain, {
+    await t.mutation(api.pipeline.completeTurn, {
       spaceId: "chat-1",
-      chainId,
+      turnId,
     });
     let carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
@@ -174,22 +173,21 @@ describe("cancellation and carry-forward", () => {
 
     const queued = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "reply" },
-      sender: "noop-handle",
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "reply" },
     });
     const rowId = await t.run(async (ctx) => {
       const row = await ctx.db
         .query("outbox")
-        .withIndex("by_guid", (q) =>
-          q.eq("clientGuid", queued.clientGuid as string)
+        .withIndex("by_idempotency_key", (q) =>
+          q.eq("idempotencyKey", queued.idempotencyKey as string)
         )
         .unique();
       return row?._id;
     });
     expect(rowId).toBeDefined();
-    await t.mutation(api.outbox.settle, {
+    await t.mutation(internal.outbox.settle, {
       rowId: rowId as NonNullable<typeof rowId>,
       ok: true,
     });
@@ -202,7 +200,7 @@ describe("cancellation and carry-forward", () => {
   });
 
   it("keeps every message across back-to-back supersessions", async () => {
-    // The regression this replaced: a chain that inherited a carried message
+    // The regression this replaced: a turn that inherited a carried message
     // and was then itself superseded dropped that message, because the flush
     // had already deleted it from the carry table. A user typing three
     // messages quickly lost the first one.
@@ -217,11 +215,11 @@ describe("cancellation and carry-forward", () => {
     const seen = await t.run(async (ctx) => {
       const carried = await ctx.db.query("carried").collect();
       const inbound = await ctx.db.query("inbound").collect();
-      const live = (await ctx.db.query("inflight").first())?.chainId;
+      const live = (await ctx.db.query("inflight").first())?.turnId;
       return [
         ...carried.map((c) => c.messageId),
         ...inbound
-          .filter((row) => row.chainId === live && row.status === "drained")
+          .filter((row) => row.turnId === live && row.status === "drained")
           .map((row) => row.messageId),
       ];
     });
@@ -229,21 +227,21 @@ describe("cancellation and carry-forward", () => {
     expect(new Set(seen)).toEqual(new Set(["m1", "m2", "m3"]));
   });
 
-  it("reports a superseded chain as cancelled, and a live one as not", async () => {
+  it("reports a superseded turn as cancelled, and a live one as not", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
 
-    const chainId = await t.run(async (ctx) => {
+    const turnId = await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
-      return inflight?.chainId;
+      return inflight?.turnId;
     });
-    expect(chainId).toBeDefined();
+    expect(turnId).toBeDefined();
 
     expect(
       await t.query(api.pipeline.isCancelled, {
         spaceId: "chat-1",
-        chainId: chainId as string,
+        turnId: turnId as string,
       })
     ).toBe(false);
 
@@ -252,85 +250,85 @@ describe("cancellation and carry-forward", () => {
     expect(
       await t.query(api.pipeline.isCancelled, {
         spaceId: "chat-1",
-        chainId: chainId as string,
+        turnId: turnId as string,
       })
     ).toBe(true);
   });
 
-  it("treats an unknown chain as cancelled", async () => {
+  it("treats an unknown turn as cancelled", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     expect(
       await t.query(api.pipeline.isCancelled, {
         spaceId: "chat-1",
-        chainId: "some-chain-that-never-existed",
+        turnId: "some-turn-that-never-existed",
       })
     ).toBe(true);
   });
 });
 
 describe("outbox", () => {
-  it("numbers each send in a chain deterministically", async () => {
+  it("numbers each send in a turn deterministically", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
-      return inflight?.chainId;
+      return inflight?.turnId;
     })) as string;
 
     const first = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "one" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "one" },
     });
     const second = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "two" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "two" },
     });
 
-    expect(first.clientGuid).toBe(`${chainId}#0`);
-    expect(second.clientGuid).toBe(`${chainId}#1`);
+    expect(first.idempotencyKey).toBe(`${turnId}#0`);
+    expect(second.idempotencyKey).toBe(`${turnId}#1`);
   });
 
-  it("refuses to queue a send from a superseded chain", async () => {
+  it("refuses to queue a send from a superseded turn", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
-      return inflight?.chainId;
+      return inflight?.turnId;
     })) as string;
 
     await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
 
     const result = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "too late" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "too late" },
     });
     expect(result.queued).toBe(false);
-    expect(result.reason).toBe("chain-cancelled");
+    expect(result.reason).toBe("turn-cancelled");
   });
 
-  it("cancels pending sends belonging to a superseded chain", async () => {
+  it("cancels pending sends belonging to a superseded turn", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
-      return inflight?.chainId;
+      return inflight?.turnId;
     })) as string;
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "queued" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "queued" },
     });
     await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
 
@@ -339,7 +337,7 @@ describe("outbox", () => {
     expect(rows[0]?.status).toBe("cancelled");
   });
 
-  it("allows a chainless send regardless of conversational state", async () => {
+  it("allows a turnless send regardless of conversational state", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
@@ -347,8 +345,8 @@ describe("outbox", () => {
 
     const result = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      kind: "send" as const,
-      content: { type: "text", text: "proactive" },
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "proactive" },
     });
     expect(result.queued).toBe(true);
   });
@@ -359,12 +357,9 @@ describe("signals do not drive turns", () => {
     message({
       messageId: id,
       triggersTurn: false,
-      content: {
-        type: "read",
-        target: {
-          id: "outbound-1",
-          content: { type: "text", text: "echo: 1" },
-        },
+      message: {
+        content: { type: "message.read" },
+        parentMessageId: "outbound-1",
       },
     });
 
@@ -389,50 +384,49 @@ describe("signals do not drive turns", () => {
     const inflight = await t.run(
       async (ctx) => await ctx.db.query("inflight").first()
     );
-    // No chain was ever created. This is what stops the echo feedback loop:
+    // No turn was ever created. This is what stops the echo feedback loop:
     // reply → read receipt → reply → … forever.
-    expect(inflight?.chainId).toBeUndefined();
+    expect(inflight?.turnId).toBeUndefined();
   });
 
   it("does not cancel the turn it is acknowledging", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
     // A receipt for the bot's own reply lands while the turn is still open.
     await t.mutation(api.inbound.enqueue, readReceipt("r1"));
 
     expect(
-      await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", chainId })
+      await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
     ).toBe(false);
   });
 });
 
 describe("pacing", () => {
-  const chainFor = async (t: ReturnType<typeof setup>) => {
+  const turnFor = async (t: ReturnType<typeof setup>) => {
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
     return (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
   };
 
   it("does not delay the first reply of a turn", async () => {
     const t = setup();
-    const chainId = await chainFor(t);
+    const turnId = await turnFor(t);
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "first" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "first" },
       pacingMs: 800,
-      sender: "noop-handle",
     });
 
     // Pacing separates consecutive messages; delaying the first is pure
@@ -440,7 +434,8 @@ describe("pacing", () => {
     const scheduled = await t.run(
       async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()
     );
-    const delivery = scheduled.find((j) => j.name.includes("deliver"));
+    const delivery = scheduled.find((j) => j.name.includes("claim"));
+    expect(delivery).toBeDefined();
     expect(delivery?.scheduledTime).toBeLessThanOrEqual(
       (delivery?._creationTime ?? 0) + 1
     );
@@ -452,26 +447,24 @@ describe("pacing counts messages, not control actions", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
     // The shape a real handler produces: acknowledge, then reply.
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "markRead" as const,
+      turnId,
+      kind: "markMessageRead" as const,
       pacingMs: 600,
-      sender: "noop-handle",
     });
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "first reply" },
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "first reply" },
       pacingMs: 600,
-      sender: "noop-handle",
     });
 
     // markRead occupies seq 0, but the reply is still the first *message* of
@@ -479,7 +472,8 @@ describe("pacing counts messages, not control actions", () => {
     const jobs = await t.run(
       async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()
     );
-    const deliveries = jobs.filter((j) => j.name.includes("deliver"));
+    const deliveries = jobs.filter((j) => j.name.includes("claim"));
+    expect(deliveries).toHaveLength(2);
     for (const job of deliveries) {
       expect(job.scheduledTime - job._creationTime).toBeLessThanOrEqual(1);
     }
@@ -491,19 +485,18 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const firstChain = (await t.run(async (ctx) => {
+    const firstTurn = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
-    // The handler queued a reply; the provider has not delivered it yet
-    // (a real iMessage send takes ~1s server-side).
+    // The handler queued a reply; it has not gone out yet (a real send
+    // takes a moment to go out).
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId: firstChain,
-      kind: "send" as const,
-      content: { type: "text", text: "reply to m1 only" },
-      sender: "noop-handle",
+      turnId: firstTurn,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "reply to m1 only" },
     });
 
     // The follow-up lands inside that window.
@@ -548,36 +541,35 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
 describe("a message is answered only when its reply actually ships", () => {
   const queueReply = async (
     t: ReturnType<typeof setup>,
-    chainId: string,
+    turnId: string,
     text: string
   ) =>
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text },
-      sender: "noop-handle",
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text },
     });
 
-  const liveChain = async (t: ReturnType<typeof setup>) =>
+  const liveTurn = async (t: ReturnType<typeof setup>) =>
     (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
   it("carries a message forward when its queued reply gets cancelled", async () => {
-    // `completeChain` runs when the handler finishes, but the reply is only
+    // `completeTurn` runs when the handler finishes, but the reply is only
     // *queued* then. A supersession moments later cancels it — so the message
     // must not stay marked as answered.
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const chainId = await liveChain(t);
+    const turnId = await liveTurn(t);
 
-    await queueReply(t, chainId, "echo: m1");
-    await t.mutation(api.pipeline.completeChain, {
+    await queueReply(t, turnId, "echo: m1");
+    await t.mutation(api.pipeline.completeTurn, {
       spaceId: "chat-1",
-      chainId,
+      turnId,
     });
 
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
@@ -592,24 +584,24 @@ describe("a message is answered only when its reply actually ships", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const chainId = await liveChain(t);
+    const turnId = await liveTurn(t);
 
-    const queued = await queueReply(t, chainId, "echo: m1");
+    const queued = await queueReply(t, turnId, "echo: m1");
     // The reply reached the user.
     await t.run(async (ctx) => {
       const row = await ctx.db
         .query("outbox")
-        .withIndex("by_guid", (q) =>
-          q.eq("clientGuid", queued.clientGuid as string)
+        .withIndex("by_idempotency_key", (q) =>
+          q.eq("idempotencyKey", queued.idempotencyKey as string)
         )
         .unique();
       if (row) {
         await ctx.db.patch(row._id, { status: "sent", sentAt: Date.now() });
       }
     });
-    await t.mutation(api.pipeline.completeChain, {
+    await t.mutation(api.pipeline.completeTurn, {
       spaceId: "chat-1",
-      chainId,
+      turnId,
     });
 
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
@@ -628,8 +620,7 @@ describe("immediate mode (the default): one message, one turn", () => {
     spaceId: "chat-1",
     messageId: "m1",
     platform: "imessage",
-    senderId: "u1",
-    content: { type: "text", text: "hey" },
+    message: { content: { type: "text", format: "plain", text: "hey" } },
     ...overrides,
   });
 
@@ -644,13 +635,13 @@ describe("immediate mode (the default): one message, one turn", () => {
       spaceId: "chat-1",
     });
     expect(rows).toHaveLength(3);
-    // Three separate chains, not one shared batch.
-    const chains = await t.run(async (ctx) => {
+    // Three separate turns, not one shared batch.
+    const turns = await t.run(async (ctx) => {
       const inbound = await ctx.db.query("inbound").collect();
       // Returned as an array: `t.run` can only hand back Convex values.
-      return inbound.map((row) => row.chainId ?? "");
+      return inbound.map((row) => row.turnId ?? "");
     });
-    expect(new Set(chains).size).toBe(3);
+    expect(new Set(turns).size).toBe(3);
   });
 
   it("never batches or carries messages", async () => {
@@ -669,20 +660,19 @@ describe("immediate mode (the default): one message, one turn", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, plain({ messageId: "m1" }));
     await settle(t);
-    const chainId = (await t.run(async (ctx) => {
+    const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db
         .query("inbound")
         .withIndex("by_message", (q) => q.eq("messageId", "m1"))
         .unique();
-      return row?.chainId;
+      return row?.turnId;
     })) as string;
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
-      chainId,
-      kind: "send" as const,
-      content: { type: "text", text: "reply to m1" },
-      sender: "noop-handle",
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: "reply to m1" },
     });
     await t.mutation(api.inbound.enqueue, plain({ messageId: "m2" }));
 
@@ -707,23 +697,22 @@ describe("concurrent immediate turns stay independent", () => {
     spaceId: "chat-1",
     messageId: "m1",
     platform: "imessage",
-    senderId: "u1",
-    content: { type: "text", text: "hey" },
+    message: { content: { type: "text", format: "plain", text: "hey" } },
     ...overrides,
   });
 
   it("does not let a later message invalidate an earlier turn's reply", async () => {
     // Regression: every turn used to share one `inflight` row, so each new
-    // message overwrote `chainId` and silently cancelled its predecessors'
+    // message overwrote `turnId` and silently cancelled its predecessors'
     // queued sends. In immediate mode all three replies must survive.
     const t = setup();
-    const chainOf = async (messageId: string) =>
+    const turnOf = async (messageId: string) =>
       (await t.run(async (ctx) => {
         const row = await ctx.db
           .query("inbound")
           .withIndex("by_message", (q) => q.eq("messageId", messageId))
           .unique();
-        return row?.chainId;
+        return row?.turnId;
       })) as string;
 
     for (const id of ["m1", "m2", "m3"]) {
@@ -732,17 +721,16 @@ describe("concurrent immediate turns stay independent", () => {
     }
 
     for (const id of ["m1", "m2", "m3"]) {
-      const chainId = await chainOf(id);
+      const turnId = await turnOf(id);
       expect(
-        await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", chainId })
+        await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
       ).toBe(false);
 
       const queued = await t.mutation(api.outbox.enqueue, {
         spaceId: "chat-1",
-        chainId,
-        kind: "send" as const,
-        content: { type: "text", text: `echo: ${id}` },
-        sender: "noop-handle",
+        turnId,
+        kind: "sendMessage" as const,
+        content: { type: "text", format: "plain", text: `echo: ${id}` },
       });
       expect(queued.queued).toBe(true);
     }

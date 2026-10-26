@@ -11,21 +11,21 @@ import schema from "./component/schema.js";
 const modules = import.meta.glob("./component/**/*.ts");
 
 /**
- * Register the Spectrum component with a `convex-test` instance.
+ * Register the Photon component with a `convex-test` instance.
  *
  * An app that installs this component and wants to test against it needs the
  * component's schema and modules registered explicitly:
  *
  * ```ts
  * import { convexTest } from "convex-test";
- * import spectrum from "@spectrum-ts/convex/test";
+ * import photon from "@photon-ai/convex/test";
  * import schema from "./schema.js";
  *
  * const modules = import.meta.glob("./**\/*.ts");
  *
  * export function initConvexTest() {
  *   const t = convexTest(schema, modules);
- *   spectrum.register(t);
+ *   photon.register(t);
  *   return t;
  * }
  * ```
@@ -35,7 +35,7 @@ const modules = import.meta.glob("./component/**/*.ts");
  */
 export function register(
   t: TestConvex<SchemaDefinition<GenericSchema, boolean>>,
-  name = "spectrum"
+  name = "photon"
 ): void {
   t.registerComponent(name, schema, modules);
 }

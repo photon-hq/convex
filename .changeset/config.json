@@ -1,9 +1,6 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@4.0.0/schema.json",
-  "changelog": [
-    "@changesets/changelog-github",
-    { "repo": "photon-hq/spectrum-convex" }
-  ],
+  "changelog": ["@changesets/changelog-github", { "repo": "photon-hq/convex" }],
   "commit": false,
   "fixed": [],
   "linked": [],

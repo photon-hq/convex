@@ -2,21 +2,21 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 /**
- * Slim inbound content, stored exactly as the native Spectrum webhook
- * delivered it. Kept as an opaque `v.any()` rather than a discriminated union
- * on purpose: the webhook wire format is additive (new content arms ship
- * without an SDK bump), and a strict validator here would reject a delivery
- * the SDK itself is happy to parse. Narrowing happens in app code, where the
- * `Content` types from `@spectrum-ts/core` apply.
+ * A Photon `Message`, stored exactly as the `message.received` event delivered
+ * it (`data.object`). Kept as an opaque `v.any()` rather than a discriminated
+ * union on purpose: the API adds fields and content types without a new API
+ * version, and a strict validator here would reject a delivery that
+ * `@photon-ai/api` itself is happy to read. Narrowing happens in app code,
+ * where the `Message` type from `@photon-ai/api` applies.
  */
-const slimContent = v.any();
+const message = v.any();
 
 export const inboundStatus = v.union(
   // Waiting for a flush to pick it up.
   v.literal("queued"),
-  // Handed to a batch; still owned by a live chain.
+  // Handed to a batch; still owned by a live turn.
   v.literal("drained"),
-  // The chain that drained it completed.
+  // The turn that drained it completed.
   v.literal("handled")
 );
 
@@ -25,7 +25,7 @@ export const outboxStatus = v.union(
   v.literal("sending"),
   v.literal("sent"),
   v.literal("failed"),
-  // The chain that queued this send was superseded before it went out.
+  // The turn that queued this send was superseded before it went out.
   v.literal("cancelled")
 );
 
@@ -37,57 +37,56 @@ export default defineSchema({
    */
   inbound: defineTable({
     spaceId: v.string(),
-    // Provider message id. Native webhooks are at-least-once, so this is the
-    // dedupe key.
+    // Photon message id (`pho_msg_…`). Webhook deliveries are at-least-once,
+    // so this is the dedupe key.
     messageId: v.string(),
     platform: v.string(),
-    senderId: v.optional(v.string()),
-    content: slimContent,
-    // Wire timestamp (ISO 8601) as delivered; `receivedAt` is our clock.
-    timestamp: v.optional(v.string()),
-    receivedAt: v.number(),
+    message,
+    // When the component stored it. Not `receivedAt`, which would read as the
+    // message's own `timestamps.receivedAt`.
+    queuedAt: v.number(),
     status: inboundStatus,
-    // Set when a chain drains this row, so cancellation can find its messages.
-    chainId: v.optional(v.string()),
+    // Set when a turn drains this row, so cancellation can find its messages.
+    turnId: v.optional(v.string()),
     raw: v.optional(v.any()),
   })
     .index("by_message", ["messageId"])
     .index("by_space_status", ["spaceId", "status"])
-    .index("by_chain", ["chainId"]),
+    .index("by_turn", ["turnId"]),
 
   /**
-   * Routing registry. iMessage sends need the `phone` (which line serves this
-   * conversation) and the chat type, neither of which is derivable from the
-   * space id alone in multi-line mode.
+   * Routing registry. Replies need the `senderId` — the agent's own user in
+   * this space, from the event's `receivedBy` — which is not derivable from
+   * the space id alone.
    */
   spaces: defineTable({
     spaceId: v.string(),
     platform: v.string(),
-    phone: v.optional(v.string()),
-    type: v.optional(v.union(v.literal("dm"), v.literal("group"))),
+    senderId: v.optional(v.string()),
+    kind: v.optional(v.string()),
     lastInboundAt: v.number(),
   }).index("by_space", ["spaceId"]),
 
   /**
-   * Per-space record of the chain that currently owns the pipeline. A "chain"
-   * is one conversational turn: flush → handler → sends.
+   * Per-space record of the turn that currently owns the pipeline. A turn is
+   * one conversational exchange: flush → handler → sends.
    *
    * `ctx.scheduler.cancel` cannot stop an action that has already started, so
    * cancellation is cooperative: a running handler polls `isCancelled`.
    *
-   * Liveness is decided by chain *identity* (`chainId` / `cancelledChainId`),
+   * Liveness is decided by turn *identity* (`turnId` / `cancelledTurnId`),
    * never by comparing timestamps. Two pipeline events can land in the same
    * millisecond — a message arriving as its own flush runs — and a
-   * `cancelledAt > chainStartedAt` test would then read a cancelled chain as
+   * `cancelledAt > turnStartedAt` test would then read a cancelled turn as
    * live. `cancelledAt` is kept for audit only.
    */
   inflight: defineTable({
     spaceId: v.string(),
-    chainId: v.optional(v.string()),
-    chainStartedAt: v.optional(v.number()),
-    /** The chain `cancel` last killed. Compared by identity, not by time. */
-    cancelledChainId: v.optional(v.string()),
-    /** Audit only — never used to decide whether a chain is live. */
+    turnId: v.optional(v.string()),
+    turnStartedAt: v.optional(v.number()),
+    /** The turn `cancel` last killed. Compared by identity, not by time. */
+    cancelledTurnId: v.optional(v.string()),
+    /** Audit only — never used to decide whether a turn is live. */
     cancelledAt: v.optional(v.number()),
     flushJobId: v.optional(v.id("_scheduled_functions")),
     handlerJobId: v.optional(v.id("_scheduled_functions")),
@@ -99,66 +98,77 @@ export default defineSchema({
    * `inflight` tracks only the *current* turn for a space, which is enough for
    * collapse mode but wrong for immediate mode, where several turns are open at
    * once and are independent. Deriving liveness from "is this the current
-   * chain?" would let each new message silently invalidate its predecessors.
+   * turn?" would let each new message silently invalidate its predecessors.
    */
-  chains: defineTable({
-    chainId: v.string(),
+  turns: defineTable({
+    turnId: v.string(),
     spaceId: v.string(),
     status: v.union(v.literal("live"), v.literal("cancelled")),
     startedAt: v.number(),
-  }).index("by_chain", ["chainId"]),
+  }).index("by_turn", ["turnId"]),
 
   /**
-   * Messages a cancelled chain had already drained. The next flush prepends
+   * Messages a cancelled turn had already drained. The next flush prepends
    * them so the model still sees them — as history, not as fresh input.
    *
-   * A flush *claims* these rows (stamps `chainId`) rather than deleting them,
-   * and they are removed only once that chain completes. Deleting at read time
-   * loses them if the claiming chain is itself superseded — the same
+   * A flush *claims* these rows (stamps `turnId`) rather than deleting them,
+   * and they are removed only once that turn completes. Deleting at read time
+   * loses them if the claiming turn is itself superseded — the same
    * "drain in the handler, not the enqueuer" rule that governs `inbound`.
    */
   carried: defineTable({
     spaceId: v.string(),
     messageId: v.string(),
-    content: slimContent,
-    senderId: v.optional(v.string()),
-    timestamp: v.optional(v.string()),
+    message,
     carriedAt: v.number(),
-    chainId: v.optional(v.string()),
+    turnId: v.optional(v.string()),
   })
     .index("by_space", ["spaceId"])
-    .index("by_chain", ["chainId"]),
+    .index("by_turn", ["turnId"]),
 
   /**
-   * Outbound sends. `clientGuid` is derived deterministically from
-   * `(chainId, seq)`, so a re-queued send lands on the row that already exists
-   * rather than a second one. It dedupes rows here only — it is not forwarded
-   * to the provider (see the note in `outbox.ts`).
+   * Outbound actions. `idempotencyKey` is derived deterministically from
+   * `(turnId, seq)`, so a re-queued send lands on the row that already exists
+   * rather than a second one, and it is sent as the request's
+   * `idempotency-key` header (see the note in `outbox.ts`).
    */
   outbox: defineTable({
     spaceId: v.string(),
-    chainId: v.optional(v.string()),
+    turnId: v.optional(v.string()),
     seq: v.number(),
-    clientGuid: v.string(),
+    idempotencyKey: v.string(),
     kind: v.union(
-      v.literal("send"),
-      v.literal("reply"),
-      v.literal("react"),
-      v.literal("markRead"),
-      v.literal("typing")
+      v.literal("sendMessage"),
+      v.literal("markMessageRead"),
+      v.literal("setSpaceTyping")
     ),
-    content: v.optional(slimContent),
+    content: v.optional(v.any()),
+    parentMessageId: v.optional(v.string()),
+    email: v.optional(v.any()),
+    telegram: v.optional(v.any()),
+    // `markMessageRead` only: the message to mark read.
     targetMessageId: v.optional(v.string()),
-    reaction: v.optional(v.string()),
     status: outboxStatus,
     attempts: v.number(),
     queuedAt: v.number(),
     sentAt: v.optional(v.number()),
-    providerMessageId: v.optional(v.string()),
+    messageId: v.optional(v.string()),
     lastError: v.optional(v.string()),
     jobId: v.optional(v.id("_scheduled_functions")),
   })
-    .index("by_guid", ["clientGuid"])
+    .index("by_idempotency_key", ["idempotencyKey"])
     .index("by_space_status", ["spaceId", "status"])
-    .index("by_chain", ["chainId"]),
+    .index("by_turn", ["turnId"]),
+
+  /**
+   * The Photon API credentials the send jobs use — a single row. The app's
+   * `PhotonComponent` passes them with every send, and `outbox.enqueue` writes
+   * them here only when they changed. Anyone with access to this deployment's
+   * dashboard can read the API key.
+   */
+  config: defineTable({
+    projectId: v.string(),
+    apiKey: v.string(),
+    baseUrl: v.optional(v.string()),
+  }),
 });

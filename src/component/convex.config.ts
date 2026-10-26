@@ -1,18 +1,18 @@
 import { defineComponent } from "convex/server";
 
 /**
- * The Spectrum component.
+ * The Photon component.
  *
  * Owns the durable inbound pipeline (dedupe → batch queue → debounced flush →
- * cancellation/carry-forward) and the outbox that drives deduped, paced sends.
- * Install it from the app's `convex/convex.config.ts`:
+ * cancellation/carry-forward) and the outbox that drives deduped, paced sends
+ * through the Photon API. Install it from the app's `convex/convex.config.ts`:
  *
  * ```ts
  * import { defineApp } from "convex/server";
- * import spectrum from "@spectrum-ts/convex/convex.config";
+ * import photon from "@photon-ai/convex/convex.config";
  *
  * const app = defineApp();
- * app.use(spectrum);
+ * app.use(photon);
  * export default app;
  * ```
  *
@@ -20,16 +20,16 @@ import { defineComponent } from "convex/server";
  * by app-owned code, from the *app's* deployment environment — set these in the
  * app's Convex dashboard, not the component's:
  *
- * - `SPECTRUM_WEBHOOK_SECRET` — verified in the webhook handler that
- *   `Spectrum.registerRoutes` mounts on the app's `httpRouter`. A component's
- *   HTTP actions cannot read app env vars, which is why the route lives there.
- * - `SPECTRUM_PROJECT_ID` / `SPECTRUM_PROJECT_SECRET` — read by
- *   `createCloudSender` (`@spectrum-ts/convex/sender`) inside the app's Node
- *   action, since only the Node runtime can speak gRPC.
- *
- * Reading them from the environment rather than accepting them as function
- * arguments keeps a secret out of scheduled-function payloads and log lines.
+ * - `PHOTON_WEBHOOK_SECRET` — verified in the webhook handler that
+ *   `PhotonComponent.registerRoutes` mounts on the app's `httpRouter`. A
+ *   component's HTTP actions cannot read app env vars, which is why the route
+ *   lives there.
+ * - `PHOTON_PROJECT_ID` / `PHOTON_API_KEY` (and the optional
+ *   `PHOTON_BASE_URL`) — read by `PhotonComponent` in the app and passed to the
+ *   component with every send. The component keeps the latest in its `config`
+ *   table; send jobs are scheduled with only an outbox row id and read the key
+ *   from there, so it stays out of scheduled-function arguments.
  */
-const component = defineComponent("spectrum");
+const component = defineComponent("photon");
 
 export default component;
