@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import {
   internalMutation,
   internalQuery,
@@ -73,31 +73,63 @@ const saveConfig = async (
   }
 };
 
-const isControlAction = (kind: Doc<"outbox">["kind"]): boolean =>
-  kind === "markMessageRead" || kind === "setSpaceTyping";
+/**
+ * Schedule a new row's claim. A reply queued behind one that has not settled
+ * waits instead, keeping its `pacingMs` for `sendNextReply`. Read receipts,
+ * typing and reactions are never held back.
+ */
+const scheduleClaim = async (
+  ctx: MutationCtx,
+  rowId: Id<"outbox">,
+  args: Pick<Doc<"outbox">, "kind" | "content" | "pacingMs">,
+  priorForTurn: Doc<"outbox">[]
+): Promise<void> => {
+  const previous = isReply(args)
+    ? priorForTurn.filter(isReply).at(-1)
+    : undefined;
+  if (previous?.status === "pending" || previous?.status === "sending") {
+    if (args.pacingMs) {
+      await ctx.db.patch(rowId, { pacingMs: args.pacingMs });
+    }
+    return;
+  }
+  const jobId = await ctx.scheduler.runAfter(
+    previous ? (args.pacingMs ?? 0) : 0,
+    internal.outbox.claim,
+    { rowId }
+  );
+  await ctx.db.patch(rowId, { jobId });
+};
 
 /**
- * Pacing delays each reply after the first one in a turn by `pacingMs`,
- * counted from when it is queued. It must never delay the first one: that is
- * pure latency before the user sees anything.
- *
- * Deliberately counted over replies only, not `seq`. Control actions (read
- * receipts, typing) and reactions occupy sequence numbers too, so keying off
- * `seq === 0` would let an auto-markMessageRead, or a reaction sent first,
- * push the actual reply into a paced slot and reintroduce the delay this
- * avoids. Neither is ever delayed itself.
+ * Once a reply settles, send the next reply its turn queued behind it,
+ * `pacingMs` later.
  */
-const pacingDelay = (
-  args: { kind: Doc<"outbox">["kind"]; content?: unknown; pacingMs?: number },
-  priorForTurn: Doc<"outbox">[]
-): number => {
-  const isReaction =
-    (args.content as { type?: unknown } | undefined)?.type === "reaction";
-  if (isControlAction(args.kind) || isReaction) {
-    return 0;
+const sendNextReply = async (
+  ctx: MutationCtx,
+  row: Doc<"outbox">
+): Promise<void> => {
+  if (!(row.turnId && isReply(row))) {
+    return;
   }
-  const priorReplies = priorForTurn.filter(isReply).length;
-  return priorReplies > 0 ? (args.pacingMs ?? 0) : 0;
+  const next = (
+    await ctx.db
+      .query("outbox")
+      .withIndex("by_turn", (q) => q.eq("turnId", row.turnId))
+      .collect()
+  ).find(
+    (other) =>
+      other.status === "pending" && other.jobId === undefined && isReply(other)
+  );
+  if (!next) {
+    return;
+  }
+  const jobId = await ctx.scheduler.runAfter(
+    next.pacingMs ?? 0,
+    internal.outbox.claim,
+    { rowId: next._id }
+  );
+  await ctx.db.patch(next._id, { jobId });
 };
 
 /**
@@ -105,8 +137,8 @@ const pacingDelay = (
  *
  * Rejects (without writing) when the queueing turn has already been
  * superseded — the guard that stops a cancelled turn from talking over the
- * turn that replaced it. `pacingMs` staggers a multi-message reply so it reads
- * like typing rather than a wall of text arriving at once.
+ * turn that replaced it. A turn's replies go out one at a time, in the order
+ * they were queued, each at least `pacingMs` after the one before it.
  */
 export const enqueue = mutation({
   args: {
@@ -206,13 +238,7 @@ export const enqueue = mutation({
       attempts: 0,
       queuedAt: now,
     });
-
-    const jobId = await ctx.scheduler.runAfter(
-      pacingDelay(args, priorForTurn),
-      internal.outbox.claim,
-      { rowId }
-    );
-    await ctx.db.patch(rowId, { jobId });
+    await scheduleClaim(ctx, rowId, args, priorForTurn);
 
     return { queued: true, idempotencyKey };
   },
@@ -336,6 +362,7 @@ const retryOrFail = async (
       status: "failed" as const,
       ...(failure.error === undefined ? {} : { lastError: failure.error }),
     });
+    await sendNextReply(ctx, row);
     return;
   }
 
@@ -388,6 +415,7 @@ export const settle = internalMutation({
           await ctx.db.delete(spent._id);
         }
       }
+      await sendNextReply(ctx, row);
       return null;
     }
 

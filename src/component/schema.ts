@@ -157,7 +157,10 @@ export default defineSchema({
     sentAt: v.optional(v.number()),
     messageId: v.optional(v.string()),
     lastError: v.optional(v.string()),
+    // Unset while a reply waits for the one queued before it to settle.
     jobId: v.optional(v.id("_scheduled_functions")),
+    // A waiting reply's pause after that one settles.
+    pacingMs: v.optional(v.number()),
   })
     .index("by_idempotency_key", ["idempotencyKey"])
     .index("by_space_queued", ["spaceId", "queuedAt"])

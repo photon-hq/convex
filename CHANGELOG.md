@@ -11,6 +11,6 @@ Initial release, for Photon Beta (2.0) only. Photon Stable keeps
   and turn cancellation with carry-forward.
 - Sends through the Photon API from the component itself — `sendMessage`,
   `markMessageRead` and `setSpaceTyping` — via an outbox with deterministic
-  idempotency keys, pacing, and retry/backoff.
+  idempotency keys, in-order replies with optional pacing, and retry/backoff.
 - `@photon-ai/convex/test` exports `register()` for apps testing against the
   component with `convex-test`.

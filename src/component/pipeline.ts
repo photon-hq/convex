@@ -61,10 +61,12 @@ export type TurnHandler = FunctionHandle<
 >;
 
 /**
- * Whether a sent outbox row answers its turn. A reaction does not: it
+ * Whether an outbox row is a reply to its turn. A reaction is not: it
  * acknowledges a message rather than replying to it.
  */
-export const isReply = (row: Doc<"outbox">): boolean =>
+export const isReply = (
+  row: Pick<Doc<"outbox">, "kind" | "content">
+): boolean =>
   row.kind === "sendMessage" &&
   (row.content as { type?: unknown } | undefined)?.type !== "reaction";
 

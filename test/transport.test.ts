@@ -625,8 +625,9 @@ describe("reactions", () => {
     await enqueue(t, turnId, reaction, 800);
     await enqueue(t, turnId, text, 800);
 
-    // The first text and the reaction go at once; only the second text paces.
-    expect(await claimDelays(t)).toEqual([0, 0, 800]);
+    // The first text and the reaction go at once; the second text waits for
+    // the first to settle.
+    expect(await claimDelays(t)).toEqual([0, 0]);
   });
 
   it("does not count as the first reply, so the reply after it is not delayed", async () => {
@@ -704,5 +705,56 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
 
     expect(photonApi.requests).toHaveLength(2);
     expect(await outbox(t)).toMatchObject([{ status: "sent", attempts: 2 }]);
+  });
+});
+
+describe("a turn's replies", () => {
+  const send = (
+    t: ReturnType<typeof setup>,
+    turnId: string,
+    part: string,
+    pacingMs?: number
+  ) =>
+    t.mutation(api.outbox.enqueue, {
+      spaceId: SPACE_ID,
+      turnId,
+      kind: "sendMessage" as const,
+      content: { type: "text", format: "plain", text: part },
+      ...(pacingMs === undefined ? {} : { pacingMs }),
+      ...credentials,
+    });
+
+  it("go out one at a time, in the order they were queued", async () => {
+    const t = setup();
+    const photonApi = stubApi(
+      json(503, { code: "SERVICE_UNAVAILABLE", status: 503 }),
+      json(202, dispatched())
+    );
+    const turnId = await startTurn(t);
+    await send(t, turnId, "one");
+    await send(t, turnId, "two");
+    await settle(t);
+
+    // "one" is retried before "two" goes out.
+    expect(
+      photonApi.requests.map(
+        (request) =>
+          (request.body as { content: { text: string } }).content.text
+      )
+    ).toEqual(["one", "one", "two"]);
+  });
+
+  it("are spaced pacingMs apart", async () => {
+    const t = setup();
+    stubApi(json(202, dispatched()));
+    const turnId = await startTurn(t);
+    for (const part of ["one", "two", "three"]) {
+      await send(t, turnId, part, 800);
+    }
+    await settle(t);
+
+    const sentAt = (await outbox(t)).map((row) => row.sentAt ?? 0);
+    expect((sentAt[1] ?? 0) - (sentAt[0] ?? 0)).toBeGreaterThanOrEqual(800);
+    expect((sentAt[2] ?? 0) - (sentAt[1] ?? 0)).toBeGreaterThanOrEqual(800);
   });
 });
