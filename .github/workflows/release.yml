@@ -45,12 +45,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # v2 is required, not just newer. v1 detected what had been published by
-      # regex-scraping the publish script's stdout for "New tag: pkg@version";
-      # @changesets/cli v3 prints "Successfully published:" instead, so v1 saw
-      # zero published packages and silently skipped both the tag push and the
-      # GitHub release — while npm had the version. v2 reads the release list
-      # from changesets directly. It also renamed every input.
+      # v2 is required: v1 does not see what @changesets/cli v3 published, so
+      # it skips the git tag and the GitHub release.
       - uses: changesets/action@v2
         with:
           # Opens/updates the "Version Packages" PR when changesets are

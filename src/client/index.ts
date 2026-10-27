@@ -26,7 +26,6 @@ import { parseWebhook } from "../shared/wire.js";
  */
 
 export const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
-const DEFAULT_DEBOUNCE_MS = 0;
 const OK_STATUS = 200;
 const SERVER_ERROR_STATUS = 500;
 
@@ -166,10 +165,6 @@ export class PhotonComponent {
     this.baseUrl = options.baseUrl ?? process.env.PHOTON_BASE_URL;
   }
 
-  private get debounceMs(): number {
-    return this.options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-  }
-
   private secret(): string | undefined {
     return this.options.webhookSecret ?? process.env.PHOTON_WEBHOOK_SECRET;
   }
@@ -248,7 +243,9 @@ export class PhotonComponent {
           triggersTurn: message.triggersTurn,
           mode: this.options.mode ?? "immediate",
           raw: message.raw,
-          debounceMs: this.debounceMs,
+          ...(this.options.debounceMs === undefined
+            ? {}
+            : { debounceMs: this.options.debounceMs }),
           ...(onTurn === undefined ? {} : { onTurn }),
         });
 

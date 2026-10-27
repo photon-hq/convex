@@ -80,17 +80,6 @@ const getInflight = async (
     .unique();
 
 /**
- * Cancel whatever turn currently owns this space.
- *
- * Cancels the scheduled flush/handler jobs, flags the turn, and moves any
- * rows the turn had already drained into `carried` so the next batch still
- * sees them. `ctx.scheduler.cancel` cannot stop an action that is already
- * running — that case is handled cooperatively by `isCancelled`, which a
- * running handler polls between steps.
- *
- * Returns the cancelled turn id, if there was one.
- */
-/**
  * Move a dead turn's messages into `carried` so the next batch still sees
  * them — the carry-forward rule.
  *
@@ -165,6 +154,17 @@ const cancelQueuedSends = async (
   }
 };
 
+/**
+ * Cancel whatever turn currently owns this space.
+ *
+ * Cancels the scheduled flush/handler jobs, flags the turn, and moves any
+ * rows the turn had already drained into `carried` so the next batch still
+ * sees them. `ctx.scheduler.cancel` cannot stop an action that is already
+ * running — that case is handled cooperatively by `isCancelled`, which a
+ * running handler polls between steps.
+ *
+ * Returns the cancelled turn id, if there was one.
+ */
 export const cancelCurrentTurn = async (
   ctx: MutationCtx,
   spaceId: string
