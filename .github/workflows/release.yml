@@ -25,6 +25,9 @@ jobs:
           # Changesets needs history to work out what has changed since the
           # last release.
           fetch-depth: 0
+          # changesets/action pushes with its own `github-token`, so the
+          # checkout's credentials need not stay in .git/config.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
