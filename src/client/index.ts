@@ -7,10 +7,12 @@ import type {
 import {
   createFunctionHandle,
   type FunctionReference,
-  type FunctionReturnType,
+  type GenericActionCtx,
+  type GenericDataModel,
+  type GenericMutationCtx,
+  type GenericQueryCtx,
   type HttpRouter,
   httpActionGeneric,
-  type OptionalRestArgs,
 } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
 import { parseWebhook } from "../shared/wire.js";
@@ -69,31 +71,16 @@ export const pickTurn = (ref: {
   turnId: ref.turnId,
 });
 
-/**
- * Minimal structural ctx types — only the capability each method actually uses.
- *
- * Deliberately not `GenericQueryCtx<GenericDataModel> | …`. An app's ctx is
- * parameterised by *its* data model (`AnyDataModel` in a generated app), which
- * is not assignable to `GenericDataModel` because the index signatures differ.
- * Nor can these borrow the ctx types' own `runQuery`/`runMutation`: an action's
- * take no options while a mutation's accept `transactionLimits`. Declaring the
- * narrower shape both satisfy — in method syntax, so parameters stay bivariant
- * — accepts a ctx from a query, mutation or action alike.
- */
-interface AnyCtx {
-  runQuery<Query extends FunctionReference<"query", "public" | "internal">>(
-    query: Query,
-    ...args: OptionalRestArgs<Query>
-  ): Promise<FunctionReturnType<Query>>;
-}
-interface RunMutationCtx {
-  runMutation<
-    Mutation extends FunctionReference<"mutation", "public" | "internal">,
-  >(
-    mutation: Mutation,
-    ...args: OptionalRestArgs<Mutation>
-  ): Promise<FunctionReturnType<Mutation>>;
-}
+// Convenient types for `ctx` args, that only include the bare minimum.
+type QueryCtx = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
+type MutationCtx = Pick<
+  GenericMutationCtx<GenericDataModel>,
+  "runQuery" | "runMutation"
+>;
+type ActionCtx = Pick<
+  GenericActionCtx<GenericDataModel>,
+  "runQuery" | "runMutation" | "runAction"
+>;
 
 /**
  * How inbound messages become turns.
@@ -278,7 +265,7 @@ export class PhotonComponent {
    * steps and return early when it flips.
    */
   async isCancelled(
-    ctx: AnyCtx,
+    ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string; turnId: string }
   ): Promise<boolean> {
     return await ctx.runQuery(
@@ -292,7 +279,7 @@ export class PhotonComponent {
    * `parentMessageId` it is a reply to that message.
    */
   async sendMessage(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     args: {
       spaceId: string;
       content: SendContent;
@@ -322,7 +309,7 @@ export class PhotonComponent {
 
   /** Mark the newest message of a turn read. */
   async markMessageRead(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     args: { spaceId: string; turnId?: string }
   ): Promise<Queued> {
     return await ctx.runMutation(this.component.outbox.enqueue, {
@@ -335,7 +322,7 @@ export class PhotonComponent {
 
   /** Mark a turn's messages handled. Call when the handler finishes. */
   async completeTurn(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     args: { spaceId: string; turnId: string }
   ): Promise<void> {
     await ctx.runMutation(this.component.pipeline.completeTurn, pickTurn(args));
@@ -343,7 +330,7 @@ export class PhotonComponent {
 
   /** Routing record for a space (`senderId`, `kind`), or `null`. */
   async getSpace(
-    ctx: AnyCtx,
+    ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string }
   ): Promise<{
     spaceId: string;
@@ -357,7 +344,7 @@ export class PhotonComponent {
 
   /** Recent inbound messages for a space, oldest first. */
   async listMessages(
-    ctx: AnyCtx,
+    ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string; limit?: number }
   ): Promise<StoredMessage[]> {
     return await ctx.runQuery(this.component.inbound.listMessages, args);
@@ -368,7 +355,7 @@ export class PhotonComponent {
    * failure audit trail.
    */
   async listOutbox(
-    ctx: AnyCtx,
+    ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string; limit?: number }
   ): Promise<
     {
