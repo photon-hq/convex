@@ -44,8 +44,7 @@ There is **no npm token**, and nothing to rotate. The package uses npm
 npmjs.com is configured to trust `photon-hq/convex` running `release.yml` in
 the `npm` environment, and the workflow's `id-token: write` permission lets the
 runner mint a short-lived credential to exchange at publish time. npm attaches
-build provenance only when the repository is public, so a release from
-`photon-hq/convex` while it is internal has none.
+build provenance automatically as a side effect.
 
 This is also what sidesteps the account's `auth-and-writes` two-factor setting,
 which otherwise stops every publish for a one-time password.
