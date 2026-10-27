@@ -44,7 +44,7 @@ const turnIsLive = async (
   }
   const record = await ctx.db
     .query("turns")
-    .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .unique();
   if (!record) {
     return false;
@@ -113,7 +113,7 @@ const sendNextReply = async (
   const next = (
     await ctx.db
       .query("outbox")
-      .withIndex("by_turn", (q) => q.eq("turnId", row.turnId))
+      .withIndex("by_turnId", (q) => q.eq("turnId", row.turnId))
       .collect()
   ).find(
     (other) =>
@@ -177,7 +177,7 @@ export const enqueue = mutation({
     const priorForTurn = args.turnId
       ? await ctx.db
           .query("outbox")
-          .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
+          .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
           .collect()
       : [];
 
@@ -187,7 +187,7 @@ export const enqueue = mutation({
     if (!targetMessageId && args.kind === "markMessageRead" && args.turnId) {
       const newest = await ctx.db
         .query("inbound")
-        .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
+        .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
         .collect();
       targetMessageId = newest.at(-1)?.messageId;
     }
@@ -286,7 +286,7 @@ export const loadJob = internalQuery({
     }
     const space = await ctx.db
       .query("spaces")
-      .withIndex("by_space", (q) => q.eq("spaceId", row.spaceId))
+      .withIndex("by_spaceId", (q) => q.eq("spaceId", row.spaceId))
       .unique();
     const config = await ctx.db.query("config").unique();
     return {
@@ -378,7 +378,7 @@ export const settle = internalMutation({
       if (isReply(row) && row.turnId) {
         const inherited = await ctx.db
           .query("carried")
-          .withIndex("by_turn", (q) => q.eq("turnId", row.turnId))
+          .withIndex("by_turnId", (q) => q.eq("turnId", row.turnId))
           .collect();
         for (const spent of inherited) {
           await ctx.db.delete("carried", spent._id);
@@ -461,7 +461,9 @@ export const list = query({
   handler: async (ctx, args) => {
     const rows = await ctx.db
       .query("outbox")
-      .withIndex("by_space_queued", (q) => q.eq("spaceId", args.spaceId))
+      .withIndex("by_spaceId_and_queuedAt", (q) =>
+        q.eq("spaceId", args.spaceId)
+      )
       .order("desc")
       .take(args.limit ?? 50);
     return rows.reverse().map(toOutboxRow);

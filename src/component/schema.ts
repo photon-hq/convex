@@ -51,10 +51,10 @@ export default defineSchema({
     // The rest of the event, without `data.object` (stored above as `message`).
     raw: v.optional(v.any()),
   })
-    .index("by_message", ["messageId"])
-    .index("by_space_queued", ["spaceId", "queuedAt"])
-    .index("by_space_status", ["spaceId", "status"])
-    .index("by_turn", ["turnId"]),
+    .index("by_messageId", ["messageId"])
+    .index("by_spaceId_and_queuedAt", ["spaceId", "queuedAt"])
+    .index("by_spaceId_and_status", ["spaceId", "status"])
+    .index("by_turnId", ["turnId"]),
 
   /**
    * Routing registry. Replies need the `senderId` — the agent's own user in
@@ -67,7 +67,7 @@ export default defineSchema({
     senderId: v.optional(v.string()),
     kind: v.optional(v.string()),
     lastInboundAt: v.number(),
-  }).index("by_space", ["spaceId"]),
+  }).index("by_spaceId", ["spaceId"]),
 
   /**
    * Per-space record of the turn that currently owns the pipeline in collapse
@@ -83,7 +83,7 @@ export default defineSchema({
     turnId: v.optional(v.string()),
     flushJobId: v.optional(v.id("_scheduled_functions")),
     handlerJobId: v.optional(v.id("_scheduled_functions")),
-  }).index("by_space", ["spaceId"]),
+  }).index("by_spaceId", ["spaceId"]),
 
   /**
    * One row per turn, and the authority on whether that turn is still live.
@@ -97,7 +97,7 @@ export default defineSchema({
     turnId: v.string(),
     spaceId: v.string(),
     status: v.union(v.literal("live"), v.literal("cancelled")),
-  }).index("by_turn", ["turnId"]),
+  }).index("by_turnId", ["turnId"]),
 
   /**
    * Messages a cancelled turn had already drained. The next flush prepends
@@ -114,8 +114,8 @@ export default defineSchema({
     message,
     turnId: v.optional(v.string()),
   })
-    .index("by_space", ["spaceId"])
-    .index("by_turn", ["turnId"]),
+    .index("by_spaceId", ["spaceId"])
+    .index("by_turnId", ["turnId"]),
 
   /**
    * Outbound actions. A row's id is its idempotency key: `sendMessage` and
@@ -147,8 +147,8 @@ export default defineSchema({
     // A waiting reply's pause after that one settles.
     pacingMs: v.optional(v.number()),
   })
-    .index("by_space_queued", ["spaceId", "queuedAt"])
-    .index("by_turn", ["turnId"]),
+    .index("by_spaceId_and_queuedAt", ["spaceId", "queuedAt"])
+    .index("by_turnId", ["turnId"]),
 
   /**
    * The Photon API credentials the send jobs use — a single row. The app's

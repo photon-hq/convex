@@ -41,7 +41,7 @@ const upsertSpace = async (
 ): Promise<void> => {
   const existing = await ctx.db
     .query("spaces")
-    .withIndex("by_space", (q) => q.eq("spaceId", args.spaceId))
+    .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
     .unique();
   const patch = {
     platform: args.platform,
@@ -91,7 +91,7 @@ export const enqueue = mutation({
   handler: async (ctx, args) => {
     const duplicate = await ctx.db
       .query("inbound")
-      .withIndex("by_message", (q) => q.eq("messageId", args.messageId))
+      .withIndex("by_messageId", (q) => q.eq("messageId", args.messageId))
       .unique();
     if (duplicate) {
       return { deduped: true };
@@ -171,7 +171,7 @@ export const getSpace = query({
   handler: async (ctx, args) => {
     const space = await ctx.db
       .query("spaces")
-      .withIndex("by_space", (q) => q.eq("spaceId", args.spaceId))
+      .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
       .unique();
     if (!space) {
       return null;
@@ -203,7 +203,9 @@ export const listMessages = query({
   handler: async (ctx, args) => {
     const rows = await ctx.db
       .query("inbound")
-      .withIndex("by_space_queued", (q) => q.eq("spaceId", args.spaceId))
+      .withIndex("by_spaceId_and_queuedAt", (q) =>
+        q.eq("spaceId", args.spaceId)
+      )
       .order("desc")
       .take(args.limit ?? 50);
     return rows.reverse().map((row) => ({

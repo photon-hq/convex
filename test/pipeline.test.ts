@@ -743,7 +743,7 @@ describe("immediate mode (the default): one message, one turn", () => {
     const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db
         .query("inbound")
-        .withIndex("by_message", (q) => q.eq("messageId", "m1"))
+        .withIndex("by_messageId", (q) => q.eq("messageId", "m1"))
         .unique();
       return row?.turnId;
     })) as string;
@@ -790,7 +790,7 @@ describe("concurrent immediate turns stay independent", () => {
       (await t.run(async (ctx) => {
         const row = await ctx.db
           .query("inbound")
-          .withIndex("by_message", (q) => q.eq("messageId", messageId))
+          .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
           .unique();
         return row?.turnId;
       })) as string;

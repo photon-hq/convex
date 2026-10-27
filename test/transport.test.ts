@@ -75,7 +75,7 @@ const startTurn = async (
   return (await t.run(async (ctx) => {
     const row = await ctx.db
       .query("inbound")
-      .withIndex("by_message", (q) =>
+      .withIndex("by_messageId", (q) =>
         q.eq("messageId", String(overrides.messageId ?? MESSAGE_ID))
       )
       .unique();

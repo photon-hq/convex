@@ -76,7 +76,7 @@ const getInflight = async (
 ): Promise<Doc<"inflight"> | null> =>
   await ctx.db
     .query("inflight")
-    .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+    .withIndex("by_spaceId", (q) => q.eq("spaceId", spaceId))
     .unique();
 
 /**
@@ -95,7 +95,7 @@ const carryForwardDrained = async (
 ): Promise<void> => {
   const drained = await ctx.db
     .query("inbound")
-    .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .collect();
   for (const row of drained) {
     const spent = includeAnswered
@@ -127,7 +127,7 @@ const releaseCarried = async (
 ): Promise<void> => {
   const claimed = await ctx.db
     .query("carried")
-    .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .collect();
   for (const row of claimed) {
     await ctx.db.patch("carried", row._id, { turnId: undefined });
@@ -141,7 +141,7 @@ const cancelQueuedSends = async (
 ): Promise<void> => {
   const queued = await ctx.db
     .query("outbox")
-    .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .collect();
   for (const row of queued) {
     if (row.status !== "pending") {
@@ -188,7 +188,7 @@ export const cancelCurrentTurn = async (
     // finishes it rather than cancelling it.
     const queued = await ctx.db
       .query("outbox")
-      .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+      .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
       .collect();
     const answered = queued.some(
       (row) =>
@@ -201,7 +201,7 @@ export const cancelCurrentTurn = async (
 
     const record = await ctx.db
       .query("turns")
-      .withIndex("by_turn", (q) => q.eq("turnId", turnId))
+      .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
       .unique();
     if (record) {
       await ctx.db.patch("turns", record._id, { status: "cancelled" as const });
@@ -278,7 +278,7 @@ export const flush = internalMutation({
       ? [target]
       : await ctx.db
           .query("inbound")
-          .withIndex("by_space_status", (q) =>
+          .withIndex("by_spaceId_and_status", (q) =>
             q.eq("spaceId", args.spaceId).eq("status", "queued")
           )
           .collect();
@@ -288,7 +288,7 @@ export const flush = internalMutation({
       ? []
       : await ctx.db
           .query("carried")
-          .withIndex("by_space", (q) => q.eq("spaceId", args.spaceId))
+          .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
           .collect();
 
     if (queued.length === 0 && carriedRows.length === 0) {
@@ -380,7 +380,7 @@ export const isCancelled = query({
   handler: async (ctx, args) => {
     const record = await ctx.db
       .query("turns")
-      .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
+      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
       .unique();
     // An unknown turn is treated as dead — a stale handler must not speak.
     if (!record) {
@@ -397,7 +397,7 @@ export const completeTurn = mutation({
   handler: async (ctx, args) => {
     const rows = await ctx.db
       .query("inbound")
-      .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
+      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
       .collect();
     for (const row of rows) {
       if (row.status === "drained") {
