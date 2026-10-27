@@ -184,14 +184,16 @@ export const cancelCurrentTurn = async (
 
   const turnId = inflight.turnId;
   if (turnId) {
-    // A turn counts as answered only if the API accepted a reply.
-    // Checked before cancelling, though `sent` rows are unaffected by that.
+    // A turn counts as answered once the API accepted a reply, or a reply is
+    // already going out: a request in flight can't be recalled, and `claim`
+    // finishes it rather than cancelling it.
     const queued = await ctx.db
       .query("outbox")
       .withIndex("by_turn", (q) => q.eq("turnId", turnId))
       .collect();
     const answered = queued.some(
-      (row) => row.status === "sent" && isReply(row)
+      (row) =>
+        (row.status === "sent" || row.status === "sending") && isReply(row)
     );
 
     await carryForwardDrained(ctx, turnId, now, !answered);

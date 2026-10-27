@@ -640,3 +640,69 @@ describe("reactions", () => {
     expect(await claimDelays(t)).toEqual([0, 0]);
   });
 });
+
+describe("a reply already going out when a follow-up supersedes its turn", () => {
+  const collapse = { mode: "collapse" as const };
+  const FOLLOW_UP_ID = "pho_msg_00000000000000000000000002";
+
+  const followUp = (t: ReturnType<typeof setup>) =>
+    t.mutation(api.inbound.enqueue, {
+      spaceId: SPACE_ID,
+      messageId: FOLLOW_UP_ID,
+      platform: "imessage",
+      message: receivedMessage({ id: FOLLOW_UP_ID }),
+      senderId: AGENT_ID,
+      kind: "direct",
+      ...collapse,
+    });
+
+  /** Queue a reply and start sending it, without letting the request finish. */
+  const startReply = async (t: ReturnType<typeof setup>, turnId: string) => {
+    await t.mutation(api.outbox.enqueue, {
+      spaceId: SPACE_ID,
+      turnId,
+      kind: "sendMessage" as const,
+      content: text,
+      ...credentials,
+    });
+    const rowId = await t.run(
+      async (ctx) => (await ctx.db.query("outbox").first())?._id
+    );
+    await t.mutation(internal.outbox.claim, {
+      rowId: rowId as NonNullable<typeof rowId>,
+    });
+  };
+
+  it("answers the turn, so its messages are not carried into the next one", async () => {
+    const t = setup();
+    const photonApi = stubApi(json(202, dispatched()));
+    const turnId = await startTurn(t, collapse);
+    await startReply(t, turnId);
+    await t.mutation(api.pipeline.completeTurn, { spaceId: SPACE_ID, turnId });
+
+    await followUp(t);
+    await settle(t);
+
+    expect(photonApi.requests).toHaveLength(1);
+    expect((await outbox(t)).map((row) => row.status)).toEqual(["sent"]);
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("carried").collect())
+    ).toEqual([]);
+  });
+
+  it("is retried after a failed attempt instead of being cancelled", async () => {
+    const t = setup();
+    const photonApi = stubApi(
+      json(503, { code: "SERVICE_UNAVAILABLE", status: 503 }),
+      json(202, dispatched())
+    );
+    const turnId = await startTurn(t, collapse);
+    await startReply(t, turnId);
+
+    await followUp(t);
+    await settle(t);
+
+    expect(photonApi.requests).toHaveLength(2);
+    expect(await outbox(t)).toMatchObject([{ status: "sent", attempts: 2 }]);
+  });
+});

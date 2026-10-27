@@ -234,7 +234,10 @@ export const claim = internalMutation({
     if (row?.status !== "pending") {
       return null;
     }
-    if (!(await turnIsLive(ctx, row.turnId))) {
+    // Only a row that never went out is cancelled with its turn. One that
+    // was attempted may already have reached the API, and a reply in flight
+    // counted as its turn's answer, so it is finished with retries.
+    if (row.attempts === 0 && !(await turnIsLive(ctx, row.turnId))) {
       await ctx.db.patch(row._id, { status: "cancelled" as const });
       return null;
     }
@@ -374,7 +377,7 @@ export const settle = internalMutation({
 
       // The API accepted a reply, so this turn's inherited messages are
       // finally spent. Doing it here rather than when the handler finishes is
-      // what makes the pipeline lossless: until a reply is accepted, every
+      // what makes the pipeline lossless: until a reply goes out, every
       // message stays recoverable by the next turn.
       if (isReply(row) && row.turnId) {
         const inherited = await ctx.db

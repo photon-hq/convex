@@ -162,11 +162,12 @@ the first reply.
   across its retries, and `sendMessage` and `markMessageRead` send it as the
   request's `idempotency-key` header. A retry after a lost response gets the
   original result back instead of sending the message a second time.
-- **Messages are never dropped.** One rule governs the pipeline: *a message is
-  spent only when the Photon API accepts a reply to it* — not when it is
-  drained, and not when the handler returns. A handler that has finished has
-  only *queued* its reply; a follow-up moments later can still cancel it. Until
-  a reply is accepted, every message stays recoverable.
+- **A message stays recoverable until a reply to it goes out.** It is not spent
+  when it is drained, and not when the handler returns: a handler that has
+  finished has only *queued* its reply, and a follow-up moments later can still
+  cancel it and carry the message into the next turn. A reply that is already
+  going out can't be recalled, so it is finished, with retries, and counts as
+  the answer; if it then fails for good, its row in `listOutbox` shows it.
 
 ## Sending
 
