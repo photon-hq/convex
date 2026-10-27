@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PhotonComponent } from "../src/client/index.js";
-import { api } from "../src/component/_generated/api.js";
+import { api, internal } from "../src/component/_generated/api.js";
 import type { ComponentApi } from "../src/component/_generated/component.js";
 import schema from "../src/component/schema.js";
 import {
@@ -362,6 +362,84 @@ describe("responses", () => {
     );
     expect(photonApi.requests).toHaveLength(5);
     expect(rows[0]).toMatchObject({ status: "failed", attempts: 5 });
+  });
+});
+
+describe("recovery", () => {
+  const queueSend = async (t: ReturnType<typeof setup>): Promise<void> => {
+    const turnId = await startTurn(t);
+    await t.mutation(api.outbox.enqueue, {
+      spaceId: SPACE_ID,
+      turnId,
+      kind: "sendMessage" as const,
+      content: text,
+      ...credentials,
+    });
+  };
+
+  /** Run the scheduled functions that are due now, not the later ones. */
+  const runDue = async (t: ReturnType<typeof setup>): Promise<void> => {
+    vi.advanceTimersByTime(0);
+    await t.finishInProgressScheduledFunctions();
+  };
+
+  it("retries an attempt whose action failed before settling it", async () => {
+    const t = setup();
+    const photonApi = stubApi(json(202, dispatched()));
+    await queueSend(t);
+    // A second config row makes `loadJob` throw, so `transport.execute` fails
+    // before it reaches `settle`.
+    const extra = await t.run(
+      async (ctx) => await ctx.db.insert("config", credentials)
+    );
+
+    await runDue(t); // claim
+    // convex-test logs the failed action.
+    const logged = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    await runDue(t); // transport.execute
+    logged.mockRestore();
+    expect((await outbox(t))[0]).toMatchObject({
+      status: "sending",
+      attempts: 1,
+    });
+
+    await t.run(async (ctx) => await ctx.db.delete(extra));
+    await settle(t);
+
+    expect(photonApi.requests).toHaveLength(1);
+    const [row] = await outbox(t);
+    expect(row).toMatchObject({ status: "sent", attempts: 2 });
+    expect(row?.lastError).toContain(
+      "transport.execute stopped before settling the row"
+    );
+  });
+
+  it("leaves an attempt alone while its action has not finished", async () => {
+    const t = setup();
+    const photonApi = stubApi(json(202, dispatched()));
+    await queueSend(t);
+    await runDue(t); // claim
+
+    // `recover` looks while `transport.execute` is still pending.
+    const recover = (
+      await t.run(
+        async (ctx) =>
+          await ctx.db.system.query("_scheduled_functions").collect()
+      )
+    ).find((job) => job.name.includes("recover"));
+    expect(recover).toBeDefined();
+    await t.mutation(internal.outbox.recover, recover?.args[0]);
+    expect((await outbox(t))[0]).toMatchObject({
+      status: "sending",
+      attempts: 1,
+    });
+
+    await settle(t);
+
+    expect(photonApi.requests).toHaveLength(1);
+    expect((await outbox(t))[0]).toMatchObject({ status: "sent", attempts: 1 });
   });
 });
 

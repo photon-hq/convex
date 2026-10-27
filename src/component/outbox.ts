@@ -24,6 +24,10 @@ import { isReply } from "./pipeline.js";
 const MAX_ATTEMPTS = 5;
 const BASE_RETRY_DELAY_MS = 1000;
 const RETRY_BACKOFF_FACTOR = 4;
+// When `recover` first looks at an attempt, and how often after that while
+// the attempt still runs. An attempt is one request, which the Photon client
+// abandons after 30 s, so a healthy attempt has settled by the first look.
+const RECOVER_DELAY_MS = 60_000;
 
 export const sendKind = v.union(
   v.literal("sendMessage"),
@@ -215,7 +219,8 @@ export const enqueue = mutation({
 });
 
 /**
- * Take one pending row and hand it to `transport.execute`.
+ * Take one pending row and hand it to `transport.execute`, with `recover` to
+ * follow up in case the action stops before settling it.
  *
  * Only the row id is scheduled: the action reads the row and the credentials
  * itself (`loadJob`), so the API key never appears in a scheduled function's
@@ -234,12 +239,18 @@ export const claim = internalMutation({
       return null;
     }
 
+    const attempt = row.attempts + 1;
     await ctx.db.patch(row._id, {
       status: "sending" as const,
-      attempts: row.attempts + 1,
+      attempts: attempt,
     });
-    await ctx.scheduler.runAfter(0, internal.transport.execute, {
+    const jobId = await ctx.scheduler.runAfter(0, internal.transport.execute, {
       rowId: row._id,
+    });
+    await ctx.scheduler.runAfter(RECOVER_DELAY_MS, internal.outbox.recover, {
+      rowId: row._id,
+      attempt,
+      jobId,
     });
     return null;
   },
@@ -307,6 +318,38 @@ export const loadJob = internalQuery({
   },
 });
 
+/**
+ * After a failed attempt, retry the row with backoff, or fail it when the
+ * error is final or the attempts are used up.
+ */
+const retryOrFail = async (
+  ctx: MutationCtx,
+  row: Doc<"outbox">,
+  failure: { error?: string; retryable?: boolean }
+): Promise<void> => {
+  const exhausted = row.attempts >= MAX_ATTEMPTS;
+  if (exhausted || failure.retryable === false) {
+    await ctx.db.patch(row._id, {
+      status: "failed" as const,
+      ...(failure.error === undefined ? {} : { lastError: failure.error }),
+    });
+    return;
+  }
+
+  // Same idempotency key on the retry, so a `sendMessage` or
+  // `markMessageRead` that actually landed before the error is answered with
+  // its original result instead of being carried out twice.
+  const delay = BASE_RETRY_DELAY_MS * RETRY_BACKOFF_FACTOR ** row.attempts;
+  const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
+    rowId: row._id,
+  });
+  await ctx.db.patch(row._id, {
+    status: "pending" as const,
+    jobId,
+    ...(failure.error === undefined ? {} : { lastError: failure.error }),
+  });
+};
+
 /** Record the API's verdict for one row; retries with backoff on failure. */
 export const settle = internalMutation({
   args: {
@@ -345,26 +388,42 @@ export const settle = internalMutation({
       return null;
     }
 
-    const exhausted = row.attempts >= MAX_ATTEMPTS;
-    if (exhausted || args.retryable === false) {
-      await ctx.db.patch(row._id, {
-        status: "failed" as const,
-        ...(args.error === undefined ? {} : { lastError: args.error }),
-      });
+    await retryOrFail(ctx, row, args);
+    return null;
+  },
+});
+
+/**
+ * Retry an attempt whose `transport.execute` stopped before settling it.
+ *
+ * Convex does not retry an action that fails, for example when `runQuery` or
+ * `runMutation` throws, so without this the row would stay `sending` and never
+ * go out. While the action is still pending or running, look again later.
+ */
+export const recover = internalMutation({
+  args: {
+    rowId: v.id("outbox"),
+    attempt: v.number(),
+    jobId: v.id("_scheduled_functions"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.rowId);
+    if (row?.status !== "sending" || row.attempts !== args.attempt) {
       return null;
     }
-
-    // Same idempotency key on the retry, so a `sendMessage` or
-    // `markMessageRead` that actually landed before the error is answered with
-    // its original result instead of being carried out twice.
-    const delay = BASE_RETRY_DELAY_MS * RETRY_BACKOFF_FACTOR ** row.attempts;
-    const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
-      rowId: row._id,
-    });
-    await ctx.db.patch(row._id, {
-      status: "pending" as const,
-      jobId,
-      ...(args.error === undefined ? {} : { lastError: args.error }),
+    const job = await ctx.db.system.get(args.jobId);
+    if (job?.state.kind === "pending" || job?.state.kind === "inProgress") {
+      await ctx.scheduler.runAfter(
+        RECOVER_DELAY_MS,
+        internal.outbox.recover,
+        args
+      );
+      return null;
+    }
+    const reason = job?.state.kind === "failed" ? `: ${job.state.error}` : "";
+    await retryOrFail(ctx, row, {
+      error: `transport.execute stopped before settling the row${reason}`,
     });
     return null;
   },
