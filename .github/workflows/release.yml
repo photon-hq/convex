@@ -38,8 +38,9 @@ jobs:
 
       - run: npm ci
 
-      # The same gate CI runs. `convex codegen` is deliberately not run here:
-      # it needs a live deployment, and `src/component/_generated` is committed.
+      # The same gate CI runs, except its check that the committed generated
+      # code is current: that one needs a local backend, and CI runs it on
+      # every push to main as well.
       - run: npm run build
       - run: npm run check
       - run: npm run typecheck

@@ -109,4 +109,5 @@ maps:
 directory is the `ComponentApi` type the client re-exports, so a stale copy
 ships a type that no longer matches the component's validators. Regenerate with
 `npm run build:codegen` (needs a Convex deployment) and commit it whenever a
-component validator changes. CI deliberately does not regenerate it.
+component validator changes. CI regenerates it against a local anonymous backend
+and fails when the committed copy is stale.
