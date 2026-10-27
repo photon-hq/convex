@@ -70,26 +70,17 @@ export default defineSchema({
   }).index("by_space", ["spaceId"]),
 
   /**
-   * Per-space record of the turn that currently owns the pipeline. A turn is
-   * one conversational exchange: flush → handler → sends.
+   * Per-space record of the turn that currently owns the pipeline in collapse
+   * mode, and its scheduled flush and handler jobs. A turn is one
+   * conversational exchange: flush → handler → sends.
    *
    * `ctx.scheduler.cancel` cannot stop an action that has already started, so
-   * cancellation is cooperative: a running handler polls `isCancelled`.
-   *
-   * Liveness is decided by turn *identity* (`turnId` / `cancelledTurnId`),
-   * never by comparing timestamps. Two pipeline events can land in the same
-   * millisecond — a message arriving as its own flush runs — and a
-   * `cancelledAt > turnStartedAt` test would then read a cancelled turn as
-   * live. `cancelledAt` is kept for audit only.
+   * cancellation is cooperative: a running handler polls `isCancelled`, which
+   * reads the turn's row in `turns`.
    */
   inflight: defineTable({
     spaceId: v.string(),
     turnId: v.optional(v.string()),
-    turnStartedAt: v.optional(v.number()),
-    /** The turn `cancel` last killed. Compared by identity, not by time. */
-    cancelledTurnId: v.optional(v.string()),
-    /** Audit only — never used to decide whether a turn is live. */
-    cancelledAt: v.optional(v.number()),
     flushJobId: v.optional(v.id("_scheduled_functions")),
     handlerJobId: v.optional(v.id("_scheduled_functions")),
   }).index("by_space", ["spaceId"]),
@@ -106,7 +97,6 @@ export default defineSchema({
     turnId: v.string(),
     spaceId: v.string(),
     status: v.union(v.literal("live"), v.literal("cancelled")),
-    startedAt: v.number(),
   }).index("by_turn", ["turnId"]),
 
   /**
@@ -122,7 +112,6 @@ export default defineSchema({
     spaceId: v.string(),
     messageId: v.string(),
     message,
-    carriedAt: v.number(),
     turnId: v.optional(v.string()),
   })
     .index("by_space", ["spaceId"])

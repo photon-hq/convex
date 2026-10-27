@@ -102,7 +102,6 @@ const getInflight = async (
 const carryForwardDrained = async (
   ctx: MutationCtx,
   turnId: string,
-  now: number,
   includeAnswered: boolean
 ): Promise<void> => {
   const drained = await ctx.db
@@ -120,7 +119,6 @@ const carryForwardDrained = async (
       spaceId: row.spaceId,
       messageId: row.messageId,
       message: row.message,
-      carriedAt: now,
     });
     await ctx.db.patch(row._id, { status: "handled" as const });
   }
@@ -169,8 +167,7 @@ const cancelQueuedSends = async (
 
 export const cancelCurrentTurn = async (
   ctx: MutationCtx,
-  spaceId: string,
-  now: number
+  spaceId: string
 ): Promise<string | undefined> => {
   const inflight = await getInflight(ctx, spaceId);
   if (!inflight) {
@@ -198,7 +195,7 @@ export const cancelCurrentTurn = async (
         (row.status === "sent" || row.status === "sending") && isReply(row)
     );
 
-    await carryForwardDrained(ctx, turnId, now, !answered);
+    await carryForwardDrained(ctx, turnId, !answered);
     await releaseCarried(ctx, turnId);
     await cancelQueuedSends(ctx, turnId);
 
@@ -212,8 +209,6 @@ export const cancelCurrentTurn = async (
   }
 
   await ctx.db.patch(inflight._id, {
-    ...(turnId === undefined ? {} : { cancelledTurnId: turnId }),
-    cancelledAt: now,
     flushJobId: undefined,
     handlerJobId: undefined,
   });
@@ -228,7 +223,6 @@ export const scheduleFlush = async (
     debounceMs: number;
     onTurn?: string;
     only?: Id<"inbound">;
-    now: number;
   }
 ): Promise<void> => {
   const jobId = await ctx.scheduler.runAfter(
@@ -321,7 +315,6 @@ export const flush = internalMutation({
       turnId,
       spaceId: args.spaceId,
       status: "live" as const,
-      startedAt: now,
     });
 
     // `inflight` models the single current turn, which only makes sense when
@@ -332,13 +325,7 @@ export const flush = internalMutation({
       const inflightId =
         inflight?._id ??
         (await ctx.db.insert("inflight", { spaceId: args.spaceId }));
-      await ctx.db.patch(inflightId, {
-        turnId,
-        turnStartedAt: now,
-        cancelledTurnId: undefined,
-        cancelledAt: undefined,
-        flushJobId: undefined,
-      });
+      await ctx.db.patch(inflightId, { turnId, flushJobId: undefined });
     }
 
     if (!args.onTurn) {
@@ -421,15 +408,5 @@ export const completeTurn = mutation({
       await ctx.db.patch(inflight._id, { handlerJobId: undefined });
     }
     return null;
-  },
-});
-
-/** Test/ops helper: force-cancel the current turn for a space. */
-export const cancel = mutation({
-  args: { spaceId: v.string() },
-  returns: v.union(v.null(), v.string()),
-  handler: async (ctx, args) => {
-    const turnId = await cancelCurrentTurn(ctx, args.spaceId, Date.now());
-    return turnId ?? null;
   },
 });

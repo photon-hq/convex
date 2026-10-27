@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "../src/component/_generated/api.js";
 import type { Id } from "../src/component/_generated/dataModel.js";
+import { cancelCurrentTurn } from "../src/component/pipeline.js";
 import schema from "../src/component/schema.js";
 
 /**
@@ -31,6 +32,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** Supersede the space's current turn, as a follow-up message does. */
+const cancelTurn = async (t: ReturnType<typeof setup>): Promise<void> => {
+  await t.run(async (ctx) => {
+    await cancelCurrentTurn(ctx, "chat-1");
+  });
+};
 
 /** Run every scheduled job, advancing the debounce timers to fire them. */
 const settle = async (t: ReturnType<typeof setup>): Promise<void> => {
@@ -236,7 +244,7 @@ describe("cancellation and carry-forward", () => {
       })
     ).toBe(false);
 
-    await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
+    await cancelTurn(t);
 
     expect(
       await t.query(api.pipeline.isCancelled, {
@@ -317,7 +325,7 @@ describe("outbox", () => {
       return inflight?.turnId;
     })) as string;
 
-    await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
+    await cancelTurn(t);
 
     const result = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -344,7 +352,7 @@ describe("outbox", () => {
       kind: "sendMessage" as const,
       content: { type: "text", format: "plain", text: "queued" },
     });
-    await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
+    await cancelTurn(t);
 
     const rows = await t.query(api.outbox.list, { spaceId: "chat-1" });
     expect(rows).toHaveLength(1);
@@ -355,7 +363,7 @@ describe("outbox", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    await t.mutation(api.pipeline.cancel, { spaceId: "chat-1" });
+    await cancelTurn(t);
 
     const result = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",

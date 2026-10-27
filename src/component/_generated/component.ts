@@ -108,13 +108,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       >;
     };
     pipeline: {
-      cancel: FunctionReference<
-        "mutation",
-        "internal",
-        { spaceId: string },
-        null | string,
-        Name
-      >;
       completeTurn: FunctionReference<
         "mutation",
         "internal",

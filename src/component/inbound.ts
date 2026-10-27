@@ -135,19 +135,17 @@ export const enqueue = mutation({
         debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
         ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
         only: rowId,
-        now,
       });
       return { deduped: false };
     }
 
     // Collapse mode: a new message supersedes whatever turn is in flight —
     // cancel it, carry its messages forward, then restart the window.
-    const cancelledTurn = await cancelCurrentTurn(ctx, args.spaceId, now);
+    const cancelledTurn = await cancelCurrentTurn(ctx, args.spaceId);
     await scheduleFlush(ctx, {
       spaceId: args.spaceId,
       debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
       ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
-      now,
     });
 
     return {
