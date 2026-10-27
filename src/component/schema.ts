@@ -129,17 +129,13 @@ export default defineSchema({
     .index("by_turn", ["turnId"]),
 
   /**
-   * Outbound actions. `idempotencyKey` is derived from `(turnId, seq)`, or
-   * from the space and the queue time for a send without a turn;
-   * `sendMessage` and `markMessageRead` send it as the request's
-   * `idempotency-key` header, and retries reuse it (see the note in
-   * `outbox.ts`).
+   * Outbound actions. A row's id is its idempotency key: `sendMessage` and
+   * `markMessageRead` send it as the request's `idempotency-key` header, and
+   * retries reuse it (see the note in `outbox.ts`).
    */
   outbox: defineTable({
     spaceId: v.string(),
     turnId: v.optional(v.string()),
-    seq: v.number(),
-    idempotencyKey: v.string(),
     kind: v.union(
       v.literal("sendMessage"),
       v.literal("markMessageRead"),
@@ -162,7 +158,6 @@ export default defineSchema({
     // A waiting reply's pause after that one settles.
     pacingMs: v.optional(v.number()),
   })
-    .index("by_idempotency_key", ["idempotencyKey"])
     .index("by_space_queued", ["spaceId", "queuedAt"])
     .index("by_turn", ["turnId"]),
 

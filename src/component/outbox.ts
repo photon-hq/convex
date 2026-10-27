@@ -13,12 +13,10 @@ import { isReply } from "./pipeline.js";
 /**
  * The outbound half: a durable outbox, one row per action.
  *
- * Every row carries an `idempotencyKey` derived from `(turnId, seq)`, or for
- * a send without a turn, from the space and the millisecond it was queued.
- * `sendMessage` and `markMessageRead` send it as the request's
- * `idempotency-key` header, and every retry of a row reuses it. So when a
- * request succeeded but its response was lost, the retry gets the original
- * result back instead of sending the message a second time.
+ * A row's id is its idempotency key. `sendMessage` and `markMessageRead` send
+ * it as the request's `idempotency-key` header, and every retry of the row
+ * reuses it. So when a request succeeded but its response was lost, the retry
+ * gets the original result back instead of sending the message a second time.
  */
 
 const MAX_ATTEMPTS = 5;
@@ -182,33 +180,6 @@ export const enqueue = mutation({
           .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
           .collect()
       : [];
-    const now = Date.now();
-    // Without a turn, `seq` counts this space's rows of the same millisecond.
-    // `Date.now()` is fixed for a whole mutation, so two sends in one mutation
-    // would otherwise share a key, and the second would be dropped as a
-    // duplicate.
-    const seq = args.turnId
-      ? priorForTurn.length
-      : (
-          await ctx.db
-            .query("outbox")
-            .withIndex("by_space_queued", (q) =>
-              q.eq("spaceId", args.spaceId).eq("queuedAt", now)
-            )
-            .collect()
-        ).length;
-    // One key per row; every retry of the row reuses it.
-    const idempotencyKey = `${args.turnId ?? `${args.spaceId}:${now}`}#${seq}`;
-
-    const existing = await ctx.db
-      .query("outbox")
-      .withIndex("by_idempotency_key", (q) =>
-        q.eq("idempotencyKey", idempotencyKey)
-      )
-      .unique();
-    if (existing) {
-      return { queued: false, idempotencyKey, reason: "duplicate" };
-    }
 
     // The read endpoint marks one message read, so fall back to the newest
     // inbound message of this turn when the caller did not name one.
@@ -224,8 +195,6 @@ export const enqueue = mutation({
     const rowId = await ctx.db.insert("outbox", {
       spaceId: args.spaceId,
       ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
-      seq,
-      idempotencyKey,
       kind: args.kind,
       ...(args.content === undefined ? {} : { content: args.content }),
       ...(args.parentMessageId === undefined
@@ -236,11 +205,11 @@ export const enqueue = mutation({
       ...(targetMessageId === undefined ? {} : { targetMessageId }),
       status: "pending" as const,
       attempts: 0,
-      queuedAt: now,
+      queuedAt: Date.now(),
     });
     await scheduleClaim(ctx, rowId, args, priorForTurn);
 
-    return { queued: true, idempotencyKey };
+    return { queued: true, idempotencyKey: rowId };
   },
 });
 
@@ -322,7 +291,7 @@ export const loadJob = internalQuery({
     const config = await ctx.db.query("config").unique();
     return {
       spaceId: row.spaceId,
-      idempotencyKey: row.idempotencyKey,
+      idempotencyKey: row._id,
       kind: row.kind,
       ...(row.content === undefined ? {} : { content: row.content }),
       ...(row.parentMessageId === undefined
@@ -472,7 +441,7 @@ const outboxRow = v.object({
 });
 
 const toOutboxRow = (row: Doc<"outbox">) => ({
-  idempotencyKey: row.idempotencyKey,
+  idempotencyKey: row._id,
   kind: row.kind,
   status: row.status,
   attempts: row.attempts,

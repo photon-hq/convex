@@ -10,7 +10,7 @@ Initial release, for Photon Beta (2.0) only. Photon Stable keeps
 - Durable inbound pipeline: at-least-once dedupe, immediate or collapsed turns,
   and turn cancellation with carry-forward.
 - Sends through the Photon API from the component itself — `sendMessage`,
-  `markMessageRead` and `setSpaceTyping` — via an outbox with deterministic
-  idempotency keys, in-order replies with optional pacing, and retry/backoff.
+  `markMessageRead` and `setSpaceTyping` — via an outbox with one idempotency
+  key per row, in-order replies with optional pacing, and retry/backoff.
 - `@photon-ai/convex/test` exports `register()` for apps testing against the
   component with `convex-test`.

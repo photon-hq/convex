@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "../src/component/_generated/api.js";
+import type { Id } from "../src/component/_generated/dataModel.js";
 import schema from "../src/component/schema.js";
 
 /**
@@ -177,18 +178,8 @@ describe("cancellation and carry-forward", () => {
       kind: "sendMessage" as const,
       content: { type: "text", format: "plain", text: "reply" },
     });
-    const rowId = await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query("outbox")
-        .withIndex("by_idempotency_key", (q) =>
-          q.eq("idempotencyKey", queued.idempotencyKey as string)
-        )
-        .unique();
-      return row?._id;
-    });
-    expect(rowId).toBeDefined();
     await t.mutation(internal.outbox.settle, {
-      rowId: rowId as NonNullable<typeof rowId>,
+      rowId: queued.idempotencyKey as Id<"outbox">,
       ok: true,
     });
 
@@ -268,7 +259,7 @@ describe("cancellation and carry-forward", () => {
 });
 
 describe("outbox", () => {
-  it("numbers each send in a turn deterministically", async () => {
+  it("keys each send by its own outbox row", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
@@ -290,11 +281,16 @@ describe("outbox", () => {
       content: { type: "text", format: "plain", text: "two" },
     });
 
-    expect(first.idempotencyKey).toBe(`${turnId}#0`);
-    expect(second.idempotencyKey).toBe(`${turnId}#1`);
+    const rows = await t.run(
+      async (ctx) => await ctx.db.query("outbox").collect()
+    );
+    expect(rows.map((row) => row._id)).toEqual([
+      first.idempotencyKey,
+      second.idempotencyKey,
+    ]);
   });
 
-  it("numbers sends without a turn apart within one millisecond", async () => {
+  it("keys sends without a turn apart within one millisecond", async () => {
     const t = setup();
     const send = async (text: string) =>
       await t.mutation(api.outbox.enqueue, {
@@ -307,14 +303,9 @@ describe("outbox", () => {
     const first = await send("one");
     const second = await send("two");
 
-    expect(first).toMatchObject({
-      queued: true,
-      idempotencyKey: `chat-1:${Date.now()}#0`,
-    });
-    expect(second).toMatchObject({
-      queued: true,
-      idempotencyKey: `chat-1:${Date.now()}#1`,
-    });
+    expect(first.queued).toBe(true);
+    expect(second.queued).toBe(true);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
   it("refuses to queue a send from a superseded turn", async () => {
@@ -410,18 +401,20 @@ describe("listing", () => {
   it("returns a space's newest outbox rows, oldest first, whatever their status", async () => {
     const t = setup();
     const statuses = ["sent", "failed", "sent", "pending"] as const;
-    await t.run(async (ctx) => {
+    const ids = await t.run(async (ctx) => {
+      const inserted: string[] = [];
       for (const [i, status] of statuses.entries()) {
-        await ctx.db.insert("outbox", {
-          spaceId: "chat-1",
-          seq: 0,
-          idempotencyKey: `k${i + 1}`,
-          kind: "sendMessage",
-          status,
-          attempts: 1,
-          queuedAt: i + 1,
-        });
+        inserted.push(
+          await ctx.db.insert("outbox", {
+            spaceId: "chat-1",
+            kind: "sendMessage",
+            status,
+            attempts: 1,
+            queuedAt: i + 1,
+          })
+        );
       }
+      return inserted;
     });
     const keys = async (limit?: number) =>
       (
@@ -431,8 +424,8 @@ describe("listing", () => {
         })
       ).map((row) => row.idempotencyKey);
 
-    expect(await keys()).toEqual(["k1", "k2", "k3", "k4"]);
-    expect(await keys(2)).toEqual(["k3", "k4"]);
+    expect(await keys()).toEqual(ids);
+    expect(await keys(2)).toEqual(ids.slice(2));
   });
 });
 
@@ -673,15 +666,10 @@ describe("a message is answered only when its reply actually ships", () => {
     const queued = await queueReply(t, turnId, "echo: m1");
     // The reply reached the user.
     await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query("outbox")
-        .withIndex("by_idempotency_key", (q) =>
-          q.eq("idempotencyKey", queued.idempotencyKey as string)
-        )
-        .unique();
-      if (row) {
-        await ctx.db.patch(row._id, { status: "sent", sentAt: Date.now() });
-      }
+      await ctx.db.patch(queued.idempotencyKey as Id<"outbox">, {
+        status: "sent",
+        sentAt: Date.now(),
+      });
     });
     await t.mutation(api.pipeline.completeTurn, {
       spaceId: "chat-1",
