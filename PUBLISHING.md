@@ -104,9 +104,6 @@ maps:
 
 - `./test` resolves to `src/test.ts`, because its `import.meta.glob` has to be
   transformed by the consumer's bundler.
-- The `@convex-dev/component-source` condition points at `src/**` so
-  `convex dev --live-component-sources` can build the component from source when
-  it is linked into a local checkout.
 
 `src/component/_generated/` is committed and ships as-is. `component.ts` in that
 directory is the `ComponentApi` type the client re-exports, so a stale copy
