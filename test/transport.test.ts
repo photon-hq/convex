@@ -405,7 +405,7 @@ describe("recovery", () => {
       attempts: 1,
     });
 
-    await t.run(async (ctx) => await ctx.db.delete(extra));
+    await t.run(async (ctx) => await ctx.db.delete("config", extra));
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(1);

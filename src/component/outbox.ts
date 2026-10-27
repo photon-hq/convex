@@ -67,7 +67,7 @@ const saveConfig = async (
     existing.apiKey !== config.apiKey ||
     existing.baseUrl !== config.baseUrl
   ) {
-    await ctx.db.replace(existing._id, config);
+    await ctx.db.replace("config", existing._id, config);
   }
 };
 
@@ -87,7 +87,7 @@ const scheduleClaim = async (
     : undefined;
   if (previous?.status === "pending" || previous?.status === "sending") {
     if (args.pacingMs) {
-      await ctx.db.patch(rowId, { pacingMs: args.pacingMs });
+      await ctx.db.patch("outbox", rowId, { pacingMs: args.pacingMs });
     }
     return;
   }
@@ -96,7 +96,7 @@ const scheduleClaim = async (
     internal.outbox.claim,
     { rowId }
   );
-  await ctx.db.patch(rowId, { jobId });
+  await ctx.db.patch("outbox", rowId, { jobId });
 };
 
 /**
@@ -127,7 +127,7 @@ const sendNextReply = async (
     internal.outbox.claim,
     { rowId: next._id }
   );
-  await ctx.db.patch(next._id, { jobId });
+  await ctx.db.patch("outbox", next._id, { jobId });
 };
 
 /**
@@ -225,7 +225,7 @@ export const claim = internalMutation({
   args: { rowId: v.id("outbox") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
+    const row = await ctx.db.get("outbox", args.rowId);
     if (row?.status !== "pending") {
       return null;
     }
@@ -233,12 +233,12 @@ export const claim = internalMutation({
     // was attempted may already have reached the API, and a reply in flight
     // counted as its turn's answer, so it is finished with retries.
     if (row.attempts === 0 && !(await turnIsLive(ctx, row.turnId))) {
-      await ctx.db.patch(row._id, { status: "cancelled" as const });
+      await ctx.db.patch("outbox", row._id, { status: "cancelled" as const });
       return null;
     }
 
     const attempt = row.attempts + 1;
-    await ctx.db.patch(row._id, {
+    await ctx.db.patch("outbox", row._id, {
       status: "sending" as const,
       attempts: attempt,
     });
@@ -280,7 +280,7 @@ export const loadJob = internalQuery({
     })
   ),
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
+    const row = await ctx.db.get("outbox", args.rowId);
     if (!row) {
       return null;
     }
@@ -327,7 +327,7 @@ const retryOrFail = async (
 ): Promise<void> => {
   const exhausted = row.attempts >= MAX_ATTEMPTS;
   if (exhausted || failure.retryable === false) {
-    await ctx.db.patch(row._id, {
+    await ctx.db.patch("outbox", row._id, {
       status: "failed" as const,
       ...(failure.error === undefined ? {} : { lastError: failure.error }),
     });
@@ -342,7 +342,7 @@ const retryOrFail = async (
   const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
     rowId: row._id,
   });
-  await ctx.db.patch(row._id, {
+  await ctx.db.patch("outbox", row._id, {
     status: "pending" as const,
     jobId,
     ...(failure.error === undefined ? {} : { lastError: failure.error }),
@@ -360,12 +360,12 @@ export const settle = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
+    const row = await ctx.db.get("outbox", args.rowId);
     if (!row) {
       return null;
     }
     if (args.ok) {
-      await ctx.db.patch(row._id, {
+      await ctx.db.patch("outbox", row._id, {
         status: "sent" as const,
         sentAt: Date.now(),
         ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
@@ -381,7 +381,7 @@ export const settle = internalMutation({
           .withIndex("by_turn", (q) => q.eq("turnId", row.turnId))
           .collect();
         for (const spent of inherited) {
-          await ctx.db.delete(spent._id);
+          await ctx.db.delete("carried", spent._id);
         }
       }
       await sendNextReply(ctx, row);
@@ -408,7 +408,7 @@ export const recover = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
+    const row = await ctx.db.get("outbox", args.rowId);
     if (row?.status !== "sending" || row.attempts !== args.attempt) {
       return null;
     }

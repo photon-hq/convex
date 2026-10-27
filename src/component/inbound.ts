@@ -53,7 +53,7 @@ const upsertSpace = async (
     ...(args.kind === undefined ? {} : { kind: args.kind }),
   };
   if (existing) {
-    await ctx.db.patch(existing._id, patch);
+    await ctx.db.patch("spaces", existing._id, patch);
     return;
   }
   await ctx.db.insert("spaces", {

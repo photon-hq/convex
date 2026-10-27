@@ -674,7 +674,7 @@ describe("a message is answered only when its reply actually ships", () => {
     const queued = await queueReply(t, turnId, "echo: m1");
     // The reply reached the user.
     await t.run(async (ctx) => {
-      await ctx.db.patch(queued.idempotencyKey as Id<"outbox">, {
+      await ctx.db.patch("outbox", queued.idempotencyKey as Id<"outbox">, {
         status: "sent",
         sentAt: Date.now(),
       });

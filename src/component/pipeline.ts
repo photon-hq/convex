@@ -109,7 +109,7 @@ const carryForwardDrained = async (
       messageId: row.messageId,
       message: row.message,
     });
-    await ctx.db.patch(row._id, { status: "handled" as const });
+    await ctx.db.patch("inbound", row._id, { status: "handled" as const });
   }
 };
 
@@ -130,7 +130,7 @@ const releaseCarried = async (
     .withIndex("by_turn", (q) => q.eq("turnId", turnId))
     .collect();
   for (const row of claimed) {
-    await ctx.db.patch(row._id, { turnId: undefined });
+    await ctx.db.patch("carried", row._id, { turnId: undefined });
   }
 };
 
@@ -150,7 +150,7 @@ const cancelQueuedSends = async (
     if (row.jobId) {
       await ctx.scheduler.cancel(row.jobId);
     }
-    await ctx.db.patch(row._id, { status: "cancelled" as const });
+    await ctx.db.patch("outbox", row._id, { status: "cancelled" as const });
   }
 };
 
@@ -204,11 +204,11 @@ export const cancelCurrentTurn = async (
       .withIndex("by_turn", (q) => q.eq("turnId", turnId))
       .unique();
     if (record) {
-      await ctx.db.patch(record._id, { status: "cancelled" as const });
+      await ctx.db.patch("turns", record._id, { status: "cancelled" as const });
     }
   }
 
-  await ctx.db.patch(inflight._id, {
+  await ctx.db.patch("inflight", inflight._id, {
     flushJobId: undefined,
     handlerJobId: undefined,
   });
@@ -243,7 +243,7 @@ export const scheduleFlush = async (
 
   const inflight = await getInflight(ctx, args.spaceId);
   if (inflight) {
-    await ctx.db.patch(inflight._id, { flushJobId: jobId });
+    await ctx.db.patch("inflight", inflight._id, { flushJobId: jobId });
     return;
   }
   await ctx.db.insert("inflight", { spaceId: args.spaceId, flushJobId: jobId });
@@ -268,7 +268,7 @@ export const flush = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const target = args.only ? await ctx.db.get(args.only) : null;
+    const target = args.only ? await ctx.db.get("inbound", args.only) : null;
     if (args.only && target?.status !== "queued") {
       // Already drained by an earlier flush, or superseded.
       return null;
@@ -301,14 +301,17 @@ export const flush = internalMutation({
     const turnId = `${args.spaceId}:${now}:${queued[0]?._id ?? "carried"}`;
 
     for (const row of queued) {
-      await ctx.db.patch(row._id, { status: "drained" as const, turnId });
+      await ctx.db.patch("inbound", row._id, {
+        status: "drained" as const,
+        turnId,
+      });
     }
     // Claim rather than delete: if this turn is itself superseded before it
     // answers, `cancelCurrentTurn` releases these back for the next flush.
     // Deleting here would drop them on a second consecutive supersession.
     const carried = carriedRows.map((row) => row.message);
     for (const row of carriedRows) {
-      await ctx.db.patch(row._id, { turnId });
+      await ctx.db.patch("carried", row._id, { turnId });
     }
 
     await ctx.db.insert("turns", {
@@ -325,7 +328,10 @@ export const flush = internalMutation({
       const inflightId =
         inflight?._id ??
         (await ctx.db.insert("inflight", { spaceId: args.spaceId }));
-      await ctx.db.patch(inflightId, { turnId, flushJobId: undefined });
+      await ctx.db.patch("inflight", inflightId, {
+        turnId,
+        flushJobId: undefined,
+      });
     }
 
     if (!args.onTurn) {
@@ -348,7 +354,7 @@ export const flush = internalMutation({
     if (!args.only) {
       const inflight = await getInflight(ctx, args.spaceId);
       if (inflight) {
-        await ctx.db.patch(inflight._id, { handlerJobId });
+        await ctx.db.patch("inflight", inflight._id, { handlerJobId });
       }
     }
     return null;
@@ -395,7 +401,7 @@ export const completeTurn = mutation({
       .collect();
     for (const row of rows) {
       if (row.status === "drained") {
-        await ctx.db.patch(row._id, { status: "handled" as const });
+        await ctx.db.patch("inbound", row._id, { status: "handled" as const });
       }
     }
     // Inherited messages are deliberately NOT dropped here. The handler has
@@ -405,7 +411,7 @@ export const completeTurn = mutation({
 
     const inflight = await getInflight(ctx, args.spaceId);
     if (inflight?.turnId === args.turnId) {
-      await ctx.db.patch(inflight._id, { handlerJobId: undefined });
+      await ctx.db.patch("inflight", inflight._id, { handlerJobId: undefined });
     }
     return null;
   },
