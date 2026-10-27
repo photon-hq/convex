@@ -48,6 +48,7 @@ export default defineSchema({
     status: inboundStatus,
     // Set when a turn drains this row, so cancellation can find its messages.
     turnId: v.optional(v.string()),
+    // The rest of the event, without `data.object` (stored above as `message`).
     raw: v.optional(v.any()),
   })
     .index("by_message", ["messageId"])
