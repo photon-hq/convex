@@ -193,9 +193,9 @@ attempt a minute after it starts. Any other error is final — for
 example `409 SPACE_NOT_SENDABLE` (SMS doesn't take replies) or `422
 OPERATION_UNAVAILABLE` (read receipts and typing are not available on every
 platform or in every space). `listOutbox` returns a space's most recent outbox
-rows (50 by default), oldest first, with their `status` and `lastError`. A send queued for a turn that a
-newer message has cancelled is not sent: `sendMessage` returns
-`{ queued: false, reason: "turn-cancelled" }`.
+rows (50 by default), oldest first, with their `status` and `lastError`. A send
+queued for a turn that a newer message has cancelled is not sent: `sendMessage`
+returns `{ queued: false, reason: "turn-cancelled" }`.
 
 Uploading attachments is not part of this release. Received attachment
 messages are stored and handed to your handler like any other message.
