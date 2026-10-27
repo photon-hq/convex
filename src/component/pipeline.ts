@@ -208,7 +208,10 @@ export const cancelCurrentTurn = async (
     }
   }
 
+  // Forget the dead turn: a second message that lands before the next flush
+  // would otherwise cancel it again and carry its messages twice.
   await ctx.db.patch("inflight", inflight._id, {
+    turnId: undefined,
     flushJobId: undefined,
     handlerJobId: undefined,
   });

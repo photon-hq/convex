@@ -141,6 +141,22 @@ describe("cancellation and carry-forward", () => {
     expect(carried[0]?.messageId).toBe("m1");
   });
 
+  it("carries a message once when two follow-ups land before the next flush", async () => {
+    const t = setup();
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
+    await settle(t);
+
+    // m3 is enqueued before the flush m2 scheduled has run, so the turn m2
+    // cancelled must not be cancelled, and its messages carried, again.
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
+
+    const carried = await t.run(
+      async (ctx) => await ctx.db.query("carried").collect()
+    );
+    expect(carried.map((row) => row.messageId)).toEqual(["m1"]);
+  });
+
   it("claims carried messages on flush rather than deleting them", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
