@@ -205,7 +205,7 @@ export const listMessages = query({
   handler: async (ctx, args) => {
     const rows = await ctx.db
       .query("inbound")
-      .withIndex("by_space_status", (q) => q.eq("spaceId", args.spaceId))
+      .withIndex("by_space_queued", (q) => q.eq("spaceId", args.spaceId))
       .order("desc")
       .take(args.limit ?? 50);
     return rows.reverse().map((row) => ({

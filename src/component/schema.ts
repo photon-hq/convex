@@ -52,6 +52,7 @@ export default defineSchema({
     raw: v.optional(v.any()),
   })
     .index("by_message", ["messageId"])
+    .index("by_space_queued", ["spaceId", "queuedAt"])
     .index("by_space_status", ["spaceId", "status"])
     .index("by_turn", ["turnId"]),
 
@@ -158,7 +159,7 @@ export default defineSchema({
     jobId: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_idempotency_key", ["idempotencyKey"])
-    .index("by_space_status", ["spaceId", "status"])
+    .index("by_space_queued", ["spaceId", "queuedAt"])
     .index("by_turn", ["turnId"]),
 
   /**

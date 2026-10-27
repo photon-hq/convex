@@ -352,6 +352,67 @@ describe("outbox", () => {
   });
 });
 
+describe("listing", () => {
+  // Each test stores rows whose statuses are out of time order. Read by status
+  // first, they would come back grouped by status, and a limit would keep the
+  // wrong ones.
+
+  it("returns a space's newest messages, oldest first, whatever their status", async () => {
+    const t = setup();
+    const statuses = ["handled", "queued", "drained", "handled"] as const;
+    await t.run(async (ctx) => {
+      for (const [i, status] of statuses.entries()) {
+        await ctx.db.insert("inbound", {
+          spaceId: "chat-1",
+          messageId: `m${i + 1}`,
+          platform: "imessage",
+          message: {},
+          queuedAt: i + 1,
+          status,
+        });
+      }
+    });
+    const ids = async (limit?: number) =>
+      (
+        await t.query(api.inbound.listMessages, {
+          spaceId: "chat-1",
+          ...(limit === undefined ? {} : { limit }),
+        })
+      ).map((row) => row.messageId);
+
+    expect(await ids()).toEqual(["m1", "m2", "m3", "m4"]);
+    expect(await ids(2)).toEqual(["m3", "m4"]);
+  });
+
+  it("returns a space's newest outbox rows, oldest first, whatever their status", async () => {
+    const t = setup();
+    const statuses = ["sent", "failed", "sent", "pending"] as const;
+    await t.run(async (ctx) => {
+      for (const [i, status] of statuses.entries()) {
+        await ctx.db.insert("outbox", {
+          spaceId: "chat-1",
+          seq: 0,
+          idempotencyKey: `k${i + 1}`,
+          kind: "sendMessage",
+          status,
+          attempts: 1,
+          queuedAt: i + 1,
+        });
+      }
+    });
+    const keys = async (limit?: number) =>
+      (
+        await t.query(api.outbox.list, {
+          spaceId: "chat-1",
+          ...(limit === undefined ? {} : { limit }),
+        })
+      ).map((row) => row.idempotencyKey);
+
+    expect(await keys()).toEqual(["k1", "k2", "k3", "k4"]);
+    expect(await keys(2)).toEqual(["k3", "k4"]);
+  });
+});
+
 describe("signals do not drive turns", () => {
   const readReceipt = (id: string) =>
     message({

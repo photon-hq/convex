@@ -362,7 +362,10 @@ export class PhotonComponent {
     return await ctx.runQuery(this.component.inbound.listMessages, args);
   }
 
-  /** Outbox rows for a space — delivery status and failure audit trail. */
+  /**
+   * Recent outbox rows for a space, oldest first — delivery status and
+   * failure audit trail.
+   */
   async listOutbox(
     ctx: AnyCtx,
     args: { spaceId: string; limit?: number }

@@ -189,8 +189,8 @@ A send is retried after a network error or a `408`, `429` or `5xx`: up to 5
 attempts, 4 s, 16 s, 64 s and 256 s apart. Any other error is final — for
 example `409 SPACE_NOT_SENDABLE` (SMS doesn't take replies) or `422
 OPERATION_UNAVAILABLE` (read receipts and typing are not available on every
-platform or in every space). `listOutbox` returns a space's outbox rows (50 by
-default) with their `status` and `lastError`. A send queued for a turn that a
+platform or in every space). `listOutbox` returns a space's most recent outbox
+rows (50 by default), oldest first, with their `status` and `lastError`. A send queued for a turn that a
 newer message has cancelled is not sent: `sendMessage` returns
 `{ queued: false, reason: "turn-cancelled" }`.
 

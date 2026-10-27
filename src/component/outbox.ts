@@ -380,14 +380,17 @@ const toOutboxRow = (row: Doc<"outbox">) => ({
   ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
 });
 
-/** Outbox rows for a space — delivery status and the failure audit trail. */
+/**
+ * Recent outbox rows for a space, newest last — delivery status and the
+ * failure audit trail.
+ */
 export const list = query({
   args: { spaceId: v.string(), limit: v.optional(v.number()) },
   returns: v.array(outboxRow),
   handler: async (ctx, args) => {
     const rows = await ctx.db
       .query("outbox")
-      .withIndex("by_space_status", (q) => q.eq("spaceId", args.spaceId))
+      .withIndex("by_space_queued", (q) => q.eq("spaceId", args.spaceId))
       .order("desc")
       .take(args.limit ?? 50);
     return rows.reverse().map(toOutboxRow);
