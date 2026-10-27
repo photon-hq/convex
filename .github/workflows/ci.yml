@@ -36,11 +36,13 @@ jobs:
       - run: npm test
       # src/component/_generated and example/convex/_generated are committed.
       # Regenerate both against a local anonymous backend, which needs no
-      # Convex account, and fail if the committed copies are stale.
+      # Convex account, and fail if the committed copies are stale. Marking
+      # new files intent-to-add makes the diff show them too.
       - name: Check generated code is current
         env:
           CONVEX_AGENT_MODE: anonymous
         run: |
           npx convex dev --once --typecheck disable
           npx convex codegen --component-dir ./src/component
+          git add --intent-to-add -- src/component/_generated example/convex/_generated
           git diff --exit-code -- src/component/_generated example/convex/_generated
