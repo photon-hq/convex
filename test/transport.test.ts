@@ -272,7 +272,7 @@ describe("responses", () => {
   });
 
   it("reads a Message the client cannot recognise from raw", async () => {
-    // Telegram typing comes back as `space.typing.update`, which 0.5.0's
+    // Telegram typing comes back as `space.typing.update`, which 0.6.0's
     // Telegram content does not include: the client wraps it as UNKNOWN.
     const t = setup();
     stubApi(
@@ -301,7 +301,7 @@ describe("responses", () => {
   });
 
   it("fails an unrecognised Message whose raw status is failed", async () => {
-    // A reaction is not iMessage content in 0.5.0, so this one is wrapped too.
+    // A reaction is not iMessage content in 0.6.0, so this one is wrapped too.
     const { rows } = await sendOnce(
       json(
         202,
