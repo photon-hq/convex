@@ -13,7 +13,8 @@ import { isReply } from "./pipeline.js";
 /**
  * The outbound half: a durable outbox, one row per action.
  *
- * Every row carries an `idempotencyKey` derived from `(turnId, seq)`.
+ * Every row carries an `idempotencyKey` derived from `(turnId, seq)`, or for
+ * a send without a turn, from the space and the millisecond it was queued.
  * `sendMessage` and `markMessageRead` send it as the request's
  * `idempotency-key` header, and every retry of a row reuses it. So when a
  * request succeeded but its response was lost, the retry gets the original
@@ -145,8 +146,21 @@ export const enqueue = mutation({
           .withIndex("by_turn", (q) => q.eq("turnId", args.turnId))
           .collect()
       : [];
-    const seq = priorForTurn.length;
     const now = Date.now();
+    // Without a turn, `seq` counts this space's rows of the same millisecond.
+    // `Date.now()` is fixed for a whole mutation, so two sends in one mutation
+    // would otherwise share a key, and the second would be dropped as a
+    // duplicate.
+    const seq = args.turnId
+      ? priorForTurn.length
+      : (
+          await ctx.db
+            .query("outbox")
+            .withIndex("by_space_queued", (q) =>
+              q.eq("spaceId", args.spaceId).eq("queuedAt", now)
+            )
+            .collect()
+        ).length;
     // One key per row; every retry of the row reuses it.
     const idempotencyKey = `${args.turnId ?? `${args.spaceId}:${now}`}#${seq}`;
 

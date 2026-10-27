@@ -294,6 +294,29 @@ describe("outbox", () => {
     expect(second.idempotencyKey).toBe(`${turnId}#1`);
   });
 
+  it("numbers sends without a turn apart within one millisecond", async () => {
+    const t = setup();
+    const send = async (text: string) =>
+      await t.mutation(api.outbox.enqueue, {
+        spaceId: "chat-1",
+        kind: "sendMessage" as const,
+        content: { type: "text", format: "plain", text },
+      });
+
+    // Fake timers hold `Date.now()` still, as a single mutation does.
+    const first = await send("one");
+    const second = await send("two");
+
+    expect(first).toMatchObject({
+      queued: true,
+      idempotencyKey: `chat-1:${Date.now()}#0`,
+    });
+    expect(second).toMatchObject({
+      queued: true,
+      idempotencyKey: `chat-1:${Date.now()}#1`,
+    });
+  });
+
   it("refuses to queue a send from a superseded turn", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());

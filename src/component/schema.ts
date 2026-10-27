@@ -129,7 +129,8 @@ export default defineSchema({
     .index("by_turn", ["turnId"]),
 
   /**
-   * Outbound actions. `idempotencyKey` is derived from `(turnId, seq)`;
+   * Outbound actions. `idempotencyKey` is derived from `(turnId, seq)`, or
+   * from the space and the queue time for a send without a turn;
    * `sendMessage` and `markMessageRead` send it as the request's
    * `idempotency-key` header, and retries reuse it (see the note in
    * `outbox.ts`).
