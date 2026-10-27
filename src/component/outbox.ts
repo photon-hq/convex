@@ -72,15 +72,15 @@ const isControlAction = (kind: Doc<"outbox">["kind"]): boolean =>
   kind === "markMessageRead" || kind === "setSpaceTyping";
 
 /**
- * Pacing delays each message after the first one in a turn by `pacingMs`,
+ * Pacing delays each reply after the first one in a turn by `pacingMs`,
  * counted from when it is queued. It must never delay the first one: that is
  * pure latency before the user sees anything.
  *
- * Deliberately counted over message-bearing rows only, not `seq`. Control
- * actions (read receipts, typing) occupy sequence numbers too, so keying off
- * `seq === 0` would let an auto-markMessageRead push the actual reply into a
- * paced slot and reintroduce the delay this avoids. A reaction is never
- * delayed either.
+ * Deliberately counted over replies only, not `seq`. Control actions (read
+ * receipts, typing) and reactions occupy sequence numbers too, so keying off
+ * `seq === 0` would let an auto-markMessageRead, or a reaction sent first,
+ * push the actual reply into a paced slot and reintroduce the delay this
+ * avoids. Neither is ever delayed itself.
  */
 const pacingDelay = (
   args: { kind: Doc<"outbox">["kind"]; content?: unknown; pacingMs?: number },
@@ -91,10 +91,8 @@ const pacingDelay = (
   if (isControlAction(args.kind) || isReaction) {
     return 0;
   }
-  const priorMessages = priorForTurn.filter(
-    (row) => !isControlAction(row.kind)
-  ).length;
-  return priorMessages > 0 ? (args.pacingMs ?? 0) : 0;
+  const priorReplies = priorForTurn.filter(isReply).length;
+  return priorReplies > 0 ? (args.pacingMs ?? 0) : 0;
 };
 
 /**

@@ -141,8 +141,9 @@ export interface PhotonComponentOptions {
    */
   onTurn?: FunctionReference<"action" | "mutation", "internal" | "public">;
   /**
-   * Delay before each message after the first one in a turn, counted from
-   * when it is queued. Read receipts and reactions are never delayed.
+   * Delay before each reply after the first one in a turn, counted from when
+   * it is queued. Read receipts and reactions are never delayed, and don't
+   * count as the first reply.
    */
   pacingMs?: number;
   /** Photon project id (`pho_prj_…`). Falls back to `process.env.PHOTON_PROJECT_ID`. */

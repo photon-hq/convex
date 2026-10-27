@@ -135,7 +135,7 @@ new PhotonComponent(components.photon, {
   onTurn: internal.agent.respond,
   mode: "collapse",   // default is "immediate"
   debounceMs: 0,      // optional extra settling window, collapse mode only
-  pacingMs: 600,      // delay before each message after a turn's first
+  pacingMs: 600,      // delay before each reply after a turn's first
 });
 ```
 
@@ -147,8 +147,9 @@ Call `completeTurn` when the handler finishes. In collapse mode, the messages
 of a turn that never completes are carried into the next turn even if it
 replied.
 
-`pacingMs` delays each message after the first one in a turn, counted from when
-it is queued; read receipts and reactions are never delayed.
+`pacingMs` delays each reply after the first one in a turn, counted from when
+it is queued. Read receipts and reactions are never delayed, and don't count as
+the first reply.
 
 ### Guarantees in both modes
 

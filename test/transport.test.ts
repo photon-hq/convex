@@ -524,6 +524,20 @@ describe("reactions", () => {
     expect(await carried()).toHaveLength(0);
   });
 
+  /** How long after it was queued each row's `claim` is scheduled to run. */
+  const claimDelays = async (t: ReturnType<typeof setup>) =>
+    (
+      await t.run(
+        async (ctx) =>
+          await ctx.db.system.query("_scheduled_functions").collect()
+      )
+    )
+      .filter((job) => job.name.includes("claim"))
+      // `_creationTime` carries sub-millisecond precision.
+      .map((job) =>
+        Math.max(0, Math.round(job.scheduledTime - job._creationTime))
+      );
+
   it("is not delayed by pacingMs", async () => {
     const t = setup();
     stubApi(json(202, dispatched()));
@@ -533,18 +547,18 @@ describe("reactions", () => {
     await enqueue(t, turnId, reaction, 800);
     await enqueue(t, turnId, text, 800);
 
-    const claims = (
-      await t.run(
-        async (ctx) =>
-          await ctx.db.system.query("_scheduled_functions").collect()
-      )
-    ).filter((job) => job.name.includes("claim"));
-    expect(claims).toHaveLength(3);
-    // `_creationTime` carries sub-millisecond precision.
-    const delays = claims.map((job) =>
-      Math.max(0, Math.round(job.scheduledTime - job._creationTime))
-    );
     // The first text and the reaction go at once; only the second text paces.
-    expect(delays).toEqual([0, 0, 800]);
+    expect(await claimDelays(t)).toEqual([0, 0, 800]);
+  });
+
+  it("does not count as the first reply, so the reply after it is not delayed", async () => {
+    const t = setup();
+    stubApi(json(202, dispatched()));
+    const turnId = await startTurn(t);
+
+    await enqueue(t, turnId, reaction, 800);
+    await enqueue(t, turnId, text, 800);
+
+    expect(await claimDelays(t)).toEqual([0, 0]);
   });
 });
