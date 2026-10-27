@@ -62,5 +62,6 @@ jobs:
         #
         # npm auth is trusted publishing (OIDC), not a token — npm trusts this
         # repo's `release.yml`, and `id-token: write` above lets the runner mint
-        # the short-lived credential. Nothing to rotate, and provenance is
-        # attached automatically. Needs npm >= 11.5.1 (Node 24 ships 11.17.0).
+        # the short-lived credential. Nothing to rotate. npm attaches provenance
+        # only when the repository is public, so a release from this repo while
+        # it is internal has none. Needs npm >= 11.5.1 (Node 24 ships 11.17.0).
