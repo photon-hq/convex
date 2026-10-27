@@ -511,7 +511,7 @@ describe("credentials", () => {
       photon.sendMessage(ctx, { spaceId: SPACE_ID, content: text })
     ).rejects.toThrow(MISSING_CREDENTIALS);
     await expect(
-      photon.markMessageRead(ctx, { spaceId: SPACE_ID })
+      photon.markMessageRead(ctx, { spaceId: SPACE_ID, turnId: "turn-1" })
     ).rejects.toThrow(MISSING_CREDENTIALS);
     expect(await outbox(t)).toHaveLength(0);
   });

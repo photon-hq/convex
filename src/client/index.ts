@@ -307,12 +307,12 @@ export class PhotonComponent {
   /** Mark the newest message of a turn read. */
   async markMessageRead(
     ctx: MutationCtx | ActionCtx,
-    args: { spaceId: string; turnId?: string }
+    args: { spaceId: string; turnId: string }
   ): Promise<Queued> {
     return await ctx.runMutation(this.component.outbox.enqueue, {
       spaceId: args.spaceId,
       kind: "markMessageRead" as const,
-      ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
+      turnId: args.turnId,
       ...this.credentials(),
     });
   }
