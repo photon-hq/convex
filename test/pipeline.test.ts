@@ -89,6 +89,20 @@ describe("inbound.enqueue", () => {
     expect(stored).toHaveLength(1);
   });
 
+  it("reports the time of the space's newest message as lastInboundAt", async () => {
+    const t = setup();
+    await t.mutation(api.inbound.enqueue, message());
+    vi.advanceTimersByTime(1000);
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
+
+    const stored = await t.query(api.inbound.listMessages, {
+      spaceId: "chat-1",
+    });
+    expect(stored[1]?.queuedAt).toBeGreaterThan(stored[0]?.queuedAt ?? 0);
+    const space = await t.query(api.inbound.getSpace, { spaceId: "chat-1" });
+    expect(space?.lastInboundAt).toBe(stored[1]?.queuedAt);
+  });
+
   it("keeps a learned senderId when a later delivery omits it", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ senderId: "agent-1" }));

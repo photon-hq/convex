@@ -66,7 +66,6 @@ export default defineSchema({
     platform: v.string(),
     senderId: v.optional(v.string()),
     kind: v.optional(v.string()),
-    lastInboundAt: v.number(),
   }).index("by_spaceId", ["spaceId"]),
 
   /**

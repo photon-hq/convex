@@ -36,30 +36,31 @@ const upsertSpace = async (
     platform: string;
     senderId?: string;
     kind?: string;
-    now: number;
   }
 ): Promise<void> => {
   const existing = await ctx.db
     .query("spaces")
     .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
     .unique();
-  const patch = {
+  const facts = {
     platform: args.platform,
-    lastInboundAt: args.now,
     // Routing facts are sticky: a later delivery without `receivedBy` must not
     // erase the sender we already learned, or replies to this space would
     // have no `senderId` to send as.
     ...(args.senderId === undefined ? {} : { senderId: args.senderId }),
     ...(args.kind === undefined ? {} : { kind: args.kind }),
   };
-  if (existing) {
-    await ctx.db.patch("spaces", existing._id, patch);
+  if (!existing) {
+    await ctx.db.insert("spaces", { spaceId: args.spaceId, ...facts });
     return;
   }
-  await ctx.db.insert("spaces", {
-    spaceId: args.spaceId,
-    ...patch,
-  });
+  // Most deliveries repeat what the space already knows; write only a change.
+  const changed = (Object.keys(facts) as (keyof typeof facts)[]).some(
+    (key) => existing[key] !== facts[key]
+  );
+  if (changed) {
+    await ctx.db.patch("spaces", existing._id, facts);
+  }
 };
 
 /**
@@ -103,7 +104,6 @@ export const enqueue = mutation({
       platform: args.platform,
       ...(args.senderId === undefined ? {} : { senderId: args.senderId }),
       ...(args.kind === undefined ? {} : { kind: args.kind }),
-      now,
     });
 
     // Signals (read receipts, typing) are recorded for visibility but never
@@ -176,12 +176,21 @@ export const getSpace = query({
     if (!space) {
       return null;
     }
+    // Read off the newest stored message, so that a delivery does not have to
+    // write the space just to record its time.
+    const newest = await ctx.db
+      .query("inbound")
+      .withIndex("by_spaceId_and_queuedAt", (q) =>
+        q.eq("spaceId", args.spaceId)
+      )
+      .order("desc")
+      .first();
     return {
       spaceId: space.spaceId,
       platform: space.platform,
       ...(space.senderId === undefined ? {} : { senderId: space.senderId }),
       ...(space.kind === undefined ? {} : { kind: space.kind }),
-      lastInboundAt: space.lastInboundAt,
+      lastInboundAt: newest?.queuedAt ?? space._creationTime,
     };
   },
 });
