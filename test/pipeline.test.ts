@@ -724,6 +724,66 @@ describe("a message is answered only when its reply actually ships", () => {
     );
     expect(carried).toHaveLength(0);
   });
+
+  /** m1, then m2 superseding its turn: the live turn answers m2 and inherits m1. */
+  const inheritingTurn = async (t: ReturnType<typeof setup>) => {
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
+    await settle(t);
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
+    await settle(t);
+    return await liveTurn(t);
+  };
+
+  /** Queue a reply for the turn and mark its request as going out. */
+  const replyInFlight = async (t: ReturnType<typeof setup>, turnId: string) => {
+    const queued = await queueReply(t, turnId, "echo: m1 and m2");
+    await t.run(async (ctx) => {
+      await ctx.db.patch("outbox", queued.idempotencyKey as Id<"outbox">, {
+        status: "sending",
+        attempts: 1,
+      });
+    });
+  };
+
+  it("keeps an inherited message with the completed turn whose reply is going out", async () => {
+    const t = setup();
+    const turnId = await inheritingTurn(t);
+    await replyInFlight(t, turnId);
+    await t.mutation(api.pipeline.completeTurn, {
+      spaceId: "chat-1",
+      turnId,
+    });
+
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
+    await settle(t);
+
+    // m1 stays with the turn whose reply answers it, instead of reaching m3's.
+    const carried = await t.run(
+      async (ctx) => await ctx.db.query("carried").collect()
+    );
+    expect(carried.map((row) => [row.messageId, row.turnId])).toEqual([
+      ["m1", turnId],
+    ]);
+  });
+
+  it("hands an inherited message on when the turn that answered it never completed", async () => {
+    const t = setup();
+    const turnId = await inheritingTurn(t);
+    await replyInFlight(t, turnId);
+    // No completeTurn: the handler was still running when m3 arrived.
+
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
+    await settle(t);
+
+    const nextTurn = await liveTurn(t);
+    const carried = await t.run(
+      async (ctx) => await ctx.db.query("carried").collect()
+    );
+    expect(carried.map((row) => [row.messageId, row.turnId])).toEqual([
+      ["m1", nextTurn],
+      ["m2", nextTurn],
+    ]);
+  });
 });
 
 describe("immediate mode (the default): one message, one turn", () => {

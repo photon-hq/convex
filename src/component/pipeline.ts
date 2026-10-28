@@ -90,13 +90,9 @@ const getInflight = async (
  */
 const carryForwardDrained = async (
   ctx: MutationCtx,
-  turnId: string,
+  drained: Doc<"inbound">[],
   includeAnswered: boolean
 ): Promise<void> => {
-  const drained = await ctx.db
-    .query("inbound")
-    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-    .collect();
   for (const row of drained) {
     const spent = includeAnswered
       ? row.status !== "drained" && row.status !== "handled"
@@ -190,9 +186,21 @@ export const cancelCurrentTurn = async (
       (row) =>
         (row.status === "sent" || row.status === "sending") && isReply(row)
     );
+    const drained = await ctx.db
+      .query("inbound")
+      .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
+      .collect();
 
-    await carryForwardDrained(ctx, turnId, !answered);
-    await releaseCarried(ctx, turnId);
+    await carryForwardDrained(ctx, drained, !answered);
+    // Inherited messages go the way of the turn's own: spent with a reply
+    // when the turn was answered and its handler called `completeTurn`, which
+    // leaves no message `drained`, and handed on otherwise. Released, they
+    // would reach the next turn while the reply that answers them still goes
+    // out.
+    const completed = drained.every((row) => row.status !== "drained");
+    if (!(answered && completed)) {
+      await releaseCarried(ctx, turnId);
+    }
     await cancelQueuedSends(ctx, queued);
 
     const record = await ctx.db
@@ -283,12 +291,16 @@ export const flush = internalMutation({
           .collect();
     // Inherited context only exists in collapse mode; immediate turns are
     // strictly one message.
+    // Only rows no turn holds: an answered turn keeps its inherited rows until
+    // its reply settles.
     const carriedRows = args.only
       ? []
-      : await ctx.db
-          .query("carried")
-          .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
-          .collect();
+      : (
+          await ctx.db
+            .query("carried")
+            .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
+            .collect()
+        ).filter((row) => row.turnId === undefined);
 
     if (queued.length === 0 && carriedRows.length === 0) {
       return null;
