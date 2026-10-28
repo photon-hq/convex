@@ -1,0 +1,36 @@
+name: Publish staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+        description: Verify and pack only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-staging
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    uses: photon-hq/buildspace/.github/workflows/package-stage.yml@9287b81f7187d136cb5c9b143a2400b6d4e460dd
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      attestations: write
+      id-token: write
+      pull-requests: read
+    with:
+      registry: https://registry.npmjs.org
+      package: "@photon-ai/convex"
+      ci-workflow: ci.yml
+      verify: pnpm run check && pnpm run typecheck && pnpm test
+      pack: node scripts/pack-release.mjs
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

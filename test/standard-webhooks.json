@@ -1,0 +1,11 @@
+{
+  "body": "{\"synthetic\":true,\"text\":\"Hello 🌍\"}",
+  "description": "Synthetic HMAC-SHA256 Standard Webhooks interoperability vector; NOT credentials.",
+  "headers": {
+    "webhook-id": "synthetic-vector",
+    "webhook-signature": "v1,0urZDpPAiQuH0H0rEB2NpIzgZKIhN6z++ZQqVUiN8e8=",
+    "webhook-timestamp": "1767225600"
+  },
+  "now": "2026-01-01T00:00:00.000Z",
+  "secret": "whsec_BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+}
