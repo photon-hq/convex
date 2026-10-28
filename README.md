@@ -134,7 +134,7 @@ The component does not impose a conversation model. Pick one with `mode`:
 new PhotonComponent(components.photon, {
   onTurn: internal.agent.respond,
   mode: "collapse",   // default is "immediate"
-  debounceMs: 0,      // optional extra settling window, collapse mode only
+  debounceMs: 0,      // optional wait before each turn; only collapse groups with it
   pacingMs: 600,      // gap between a turn's replies
 });
 ```
