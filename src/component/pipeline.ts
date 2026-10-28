@@ -153,7 +153,8 @@ const cancelQueuedSends = async (
 };
 
 /**
- * Cancel whatever turn currently owns this space.
+ * Cancel whatever turn currently owns this space, and record `flushJobId`, the
+ * flush armed to start the next one, in its place.
  *
  * Cancels the scheduled flush/handler jobs, flags the turn, and moves any
  * rows the turn had already drained into `carried` so the next batch still
@@ -165,10 +166,14 @@ const cancelQueuedSends = async (
  */
 export const cancelCurrentTurn = async (
   ctx: MutationCtx,
-  spaceId: string
+  spaceId: string,
+  flushJobId?: Id<"_scheduled_functions">
 ): Promise<string | undefined> => {
   const inflight = await getInflight(ctx, spaceId);
   if (!inflight) {
+    if (flushJobId) {
+      await ctx.db.insert("inflight", { spaceId, flushJobId });
+    }
     return;
   }
 
@@ -219,13 +224,18 @@ export const cancelCurrentTurn = async (
   // would otherwise cancel it again and carry its messages twice.
   await ctx.db.patch("inflight", inflight._id, {
     turnId: undefined,
-    flushJobId: undefined,
+    flushJobId,
     handlerJobId: undefined,
   });
   return turnId;
 };
 
-/** Arm (or re-arm) the debounce timer for a space. */
+/**
+ * Arm the debounce timer for a space. A collapse flush is recorded in
+ * `inflight` by `cancelCurrentTurn`, so the next message can cancel it. In
+ * immediate mode each message owns its own flush, so the job id is not
+ * tracked for cancellation — there is nothing to supersede.
+ */
 export const scheduleFlush = async (
   ctx: MutationCtx,
   args: {
@@ -234,30 +244,12 @@ export const scheduleFlush = async (
     onTurn?: string;
     only?: Id<"inbound">;
   }
-): Promise<void> => {
-  const jobId = await ctx.scheduler.runAfter(
-    args.debounceMs,
-    internal.pipeline.flush,
-    {
-      spaceId: args.spaceId,
-      ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
-      ...(args.only === undefined ? {} : { only: args.only }),
-    }
-  );
-
-  // In immediate mode each message owns its own flush, so the job id is not
-  // tracked for cancellation — there is nothing to supersede.
-  if (args.only) {
-    return;
-  }
-
-  const inflight = await getInflight(ctx, args.spaceId);
-  if (inflight) {
-    await ctx.db.patch("inflight", inflight._id, { flushJobId: jobId });
-    return;
-  }
-  await ctx.db.insert("inflight", { spaceId: args.spaceId, flushJobId: jobId });
-};
+): Promise<Id<"_scheduled_functions">> =>
+  await ctx.scheduler.runAfter(args.debounceMs, internal.pipeline.flush, {
+    spaceId: args.spaceId,
+    ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
+    ...(args.only === undefined ? {} : { only: args.only }),
+  });
 
 /**
  * Debounce expired: drain the burst and start a turn.
