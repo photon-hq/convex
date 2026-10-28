@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { type Infer, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
@@ -9,6 +9,7 @@ import {
   query,
 } from "./_generated/server.js";
 import { isReply } from "./pipeline.js";
+import { credentials, sendFields } from "./schema.js";
 
 /**
  * The outbound half: a durable outbox, one row per action.
@@ -26,12 +27,6 @@ const RETRY_BACKOFF_FACTOR = 4;
 // the attempt still runs. An attempt is one request, which the Photon client
 // abandons after 30 s, so a healthy attempt has settled by the first look.
 const RECOVER_DELAY_MS = 60_000;
-
-export const sendKind = v.union(
-  v.literal("sendMessage"),
-  v.literal("markMessageRead"),
-  v.literal("setSpaceTyping")
-);
 
 const turnIsLive = async (
   ctx: MutationCtx,
@@ -55,7 +50,7 @@ const turnIsLive = async (
 /** Keep the single `config` row in step with the credentials the app passed. */
 const saveConfig = async (
   ctx: MutationCtx,
-  config: { projectId: string; apiKey: string; baseUrl?: string }
+  config: Infer<typeof credentials>
 ): Promise<void> => {
   const existing = await ctx.db.query("config").unique();
   if (!existing) {
@@ -140,21 +135,13 @@ const sendNextReply = async (
  */
 export const enqueue = mutation({
   args: {
-    spaceId: v.string(),
+    ...sendFields,
     turnId: v.optional(v.string()),
-    kind: sendKind,
-    content: v.optional(v.any()),
-    parentMessageId: v.optional(v.string()),
-    email: v.optional(v.any()),
-    telegram: v.optional(v.any()),
-    targetMessageId: v.optional(v.string()),
     pacingMs: v.optional(v.number()),
     // Photon API credentials. Given `projectId` and `apiKey`, the three
     // together replace the stored ones when different, so an omitted `baseUrl`
     // clears the stored one; without them, the stored ones are used.
-    projectId: v.optional(v.string()),
-    apiKey: v.optional(v.string()),
-    baseUrl: v.optional(v.string()),
+    ...credentials.partial().fields,
   },
   returns: v.object({
     queued: v.boolean(),
@@ -255,23 +242,10 @@ export const loadJob = internalQuery({
   returns: v.union(
     v.null(),
     v.object({
-      spaceId: v.string(),
+      ...sendFields,
       idempotencyKey: v.string(),
-      kind: sendKind,
-      content: v.optional(v.any()),
-      parentMessageId: v.optional(v.string()),
-      email: v.optional(v.any()),
-      telegram: v.optional(v.any()),
-      targetMessageId: v.optional(v.string()),
       senderId: v.optional(v.string()),
-      config: v.union(
-        v.null(),
-        v.object({
-          projectId: v.string(),
-          apiKey: v.string(),
-          baseUrl: v.optional(v.string()),
-        })
-      ),
+      config: v.union(v.null(), credentials),
     })
   ),
   handler: async (ctx, args) => {

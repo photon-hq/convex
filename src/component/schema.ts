@@ -29,6 +29,33 @@ export const outboxStatus = v.union(
   v.literal("cancelled")
 );
 
+export const sendKind = v.union(
+  v.literal("sendMessage"),
+  v.literal("markMessageRead"),
+  v.literal("setSpaceTyping")
+);
+
+/**
+ * One outbound action, as `outbox.enqueue` takes it, the `outbox` table keeps
+ * it and `outbox.loadJob` hands it to `transport.execute`.
+ */
+export const sendFields = {
+  spaceId: v.string(),
+  kind: sendKind,
+  content: v.optional(v.any()),
+  parentMessageId: v.optional(v.string()),
+  email: v.optional(v.any()),
+  telegram: v.optional(v.any()),
+  // `markMessageRead` only: the message to mark read.
+  targetMessageId: v.optional(v.string()),
+};
+
+export const credentials = v.object({
+  projectId: v.string(),
+  apiKey: v.string(),
+  baseUrl: v.optional(v.string()),
+});
+
 export default defineSchema({
   /**
    * Every verified inbound message, and the batch queue itself. Messages stay
@@ -122,19 +149,8 @@ export default defineSchema({
    * retries reuse it (see the note in `outbox.ts`).
    */
   outbox: defineTable({
-    spaceId: v.string(),
+    ...sendFields,
     turnId: v.optional(v.string()),
-    kind: v.union(
-      v.literal("sendMessage"),
-      v.literal("markMessageRead"),
-      v.literal("setSpaceTyping")
-    ),
-    content: v.optional(v.any()),
-    parentMessageId: v.optional(v.string()),
-    email: v.optional(v.any()),
-    telegram: v.optional(v.any()),
-    // `markMessageRead` only: the message to mark read.
-    targetMessageId: v.optional(v.string()),
     status: outboxStatus,
     attempts: v.number(),
     queuedAt: v.number(),
@@ -155,9 +171,5 @@ export default defineSchema({
    * them here only when they changed. Anyone with access to this deployment's
    * dashboard can read the API key.
    */
-  config: defineTable({
-    projectId: v.string(),
-    apiKey: v.string(),
-    baseUrl: v.optional(v.string()),
-  }),
+  config: defineTable(credentials),
 });
