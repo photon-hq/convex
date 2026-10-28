@@ -1,6 +1,6 @@
 {
   "name": "@photon-ai/convex",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Convex component for Photon — durable inbound pipeline, batching, cancellation, and a deduped, paced outbox.",
   "repository": {
     "type": "git",

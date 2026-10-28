@@ -75,7 +75,16 @@ Packages PR can't be opened.
 
 ## Publishing by hand
 
-Only needed for the first publish, or if CI is unavailable:
+Only needed for the first release, or if CI is unavailable.
+
+npm trusts a publisher only for a package that already exists, so CI can't
+publish 0.1.0. For that first release, check out the Version Packages PR's
+branch, run the steps below, then merge the PR. `release.yml` then finds 0.1.0
+on npm and publishes nothing, so it also pushes no tag and opens no GitHub
+release: push `v0.1.0` on the merge commit and create the release, with that
+version's `CHANGELOG.md` section as its body, by hand. Add the trusted
+publisher (see Authentication) just before merging the next Version Packages
+PR: a new one expires unless a publish uses it within 2 days.
 
 ```sh
 npm run build:clean   # regenerates _generated, then rebuilds
