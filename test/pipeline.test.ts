@@ -92,7 +92,9 @@ describe("inbound.enqueue", () => {
   it("reports the time of the space's newest message as lastInboundAt", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
-    vi.advanceTimersByTime(1000);
+    // Move the clock without firing the first message's flush, which the
+    // second message would otherwise cancel while it runs.
+    vi.setSystemTime(Date.now() + 1000);
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
 
     const stored = await t.query(api.inbound.listMessages, {
