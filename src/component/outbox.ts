@@ -8,7 +8,7 @@ import {
   mutation,
   query,
 } from "./_generated/server.js";
-import { isReply } from "./pipeline.js";
+import { getTurn, isReply } from "./pipeline.js";
 import { credentials, sendFields } from "./schema.js";
 
 /**
@@ -37,14 +37,8 @@ const turnIsLive = async (
     // subject to conversational cancellation.
     return true;
   }
-  const record = await ctx.db
-    .query("turns")
-    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-    .unique();
-  if (!record) {
-    return false;
-  }
-  return record.status === "live";
+  const record = await getTurn(ctx, turnId);
+  return record?.status === "live";
 };
 
 /** Keep the single `config` row in step with the credentials the app passed. */

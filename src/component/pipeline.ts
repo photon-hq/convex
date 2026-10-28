@@ -7,6 +7,7 @@ import {
   internalMutation,
   type MutationCtx,
   mutation,
+  type QueryCtx,
   query,
 } from "./_generated/server.js";
 
@@ -77,6 +78,15 @@ const getInflight = async (
   await ctx.db
     .query("inflight")
     .withIndex("by_spaceId", (q) => q.eq("spaceId", spaceId))
+    .unique();
+
+export const getTurn = async (
+  ctx: QueryCtx,
+  turnId: string
+): Promise<Doc<"turns"> | null> =>
+  await ctx.db
+    .query("turns")
+    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .unique();
 
 /**
@@ -211,10 +221,7 @@ export const cancelCurrentTurn = async (
     await releaseCarried(ctx, turnId, answered && completed);
     await cancelQueuedSends(ctx, queued);
 
-    const record = await ctx.db
-      .query("turns")
-      .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-      .unique();
+    const record = await getTurn(ctx, turnId);
     if (record) {
       await ctx.db.patch("turns", record._id, { status: "cancelled" as const });
     }
@@ -374,10 +381,7 @@ export const isCancelled = query({
   args: { spaceId: v.string(), turnId: v.string() },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const record = await ctx.db
-      .query("turns")
-      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
-      .unique();
+    const record = await getTurn(ctx, args.turnId);
     // An unknown turn is treated as dead — a stale handler must not speak.
     if (!record) {
       return true;
