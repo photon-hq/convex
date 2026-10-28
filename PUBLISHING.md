@@ -1,110 +1,57 @@
 # Publishing
 
-Releases are driven by [Changesets](https://github.com/changesets/changesets)
-and run in CI. The normal path involves no local publishing.
+`@photon-ai/convex` is published with Photon's shared stage-and-promote
+workflows from [buildspace](https://github.com/photon-hq/buildspace#package-stage-and-promote).
+Every push to `main` publishes a staging build to npm, and a person promotes a
+staging build to production. Production gets the exact files staging tested;
+nothing is rebuilt.
 
-## Day to day
+## Staging: every push to `main`
 
-Add a changeset alongside any change a consumer can observe:
+`.github/workflows/publish.yml` (**Publish staging**) waits for `ci.yml` to pass
+on the pushed commit, runs `npm ci` and the checks once, then runs
+`scripts/pack-release.mjs` twice from the same checkout:
 
-```sh
-npm run changeset
-```
+- the staging build, `X.Y.Z-staging.<run id>.<attempt>`, which it publishes to
+  npm under the `staging` dist-tag;
+- the production candidate, `X.Y.Z`, which it stores beside the staging build
+  in a GitHub prerelease named `convex-staging-<staging version>`.
 
-Pick the bump level and write the line you want in the changelog. Commit the
-generated file in `.changeset/` with your PR.
+`X.Y.Z` is the `version` in `package.json`. Install a staging build with
+`npm install @photon-ai/convex@staging`.
 
-Skip it for things a consumer can't see — CI config, tests, internal refactors.
+## Production: Promote to production
 
-## How a release happens
+1. In Actions, run **Promote to production** on `main`. Leave the version blank
+   to promote what `staging` points to, or name a staging version:
+   `gh workflow run promote.yml -f staging_version=<staging version>`.
+2. Its first job only checks the build, and its summary lists the version and
+   the commits since the current `latest`.
+3. The run then waits for a reviewer of the `production` environment.
+4. Once approved, it publishes the stored candidate under `latest`, tags the
+   source commit `vX.Y.Z`, and creates the GitHub release.
 
-1. A PR with a changeset merges to `main`.
-2. `.github/workflows/release.yml` runs the full gate (build, biome, typecheck,
-   tests), then opens or updates a **"Version Packages"** PR. That PR applies
-   every pending changeset: bumps `package.json`, folds the entries into
-   `CHANGELOG.md`, and deletes the consumed changeset files.
-3. Merging the Version Packages PR re-runs the workflow, which sees no pending
-   changesets and instead runs `npm run release` — a fresh build followed by
-   `changeset publish`.
-4. `changeset publish` publishes any version not already on the registry. The
-   action then pushes a `v<version>` git tag and opens a GitHub release whose
-   body is that version's `CHANGELOG.md` section.
+A version is released once: bump `version` in `package.json` in a pull request
+before the next promotion.
 
-> **Keep `changesets/action` on v2 or newer.** v1 worked out what had been
-> published by regex-scraping the publish script's stdout for
-> `New tag: pkg@version`. `@changesets/cli` v3 prints `Successfully published:`
-> instead, so v1 matched nothing, concluded nothing shipped, and skipped the tag
-> and the release — while npm had the package. The job still went green. v2
-> reads the release list from changesets directly instead of parsing output.
+## Setup
 
-## Authentication
+Done once, outside the code:
 
-There is **no npm token**, and nothing to rotate. The package uses npm
-[trusted publishing](https://docs.npmjs.com/trusted-publishers) over OIDC:
-npmjs.com is configured to trust `photon-hq/convex` running `release.yml` in
-the `npm` environment, and the workflow's `id-token: write` permission lets the
-runner mint a short-lived credential to exchange at publish time. npm attaches
-build provenance automatically as a side effect.
+- **GitHub environments** (a repository admin, Settings → Environments):
+  `staging` with a branch rule for `main`, and `production` with a required
+  reviewer and a branch rule for `main`. Promotion refuses to run until
+  `production` has a reviewer.
+- **npm trusted publishers** (an `@photon-ai` maintainer, on npmjs.com): one for
+  `publish.yml` with environment `staging`, and one for `promote.yml` with
+  environment `production`, each allowing `npm publish` and `npm dist-tag`.
+  Both workflows publish through trusted publishing, with provenance and no
+  token. npm trusts a publisher only for a package that already exists, so
+  `@photon-ai/convex` has to be on npm before the first staging build can be
+  published.
 
-This is also what sidesteps the account's `auth-and-writes` two-factor setting,
-which otherwise stops every publish for a one-time password.
-
-The trusted publisher on npmjs.com: organization `photon-hq`, repository
-`convex`, workflow filename `release.yml`, environment `npm`, with **npm
-publish** allowed — a new configuration allows only `npm stage publish`, and
-`changeset publish` runs `npm publish`. A new configuration expires if no
-publish uses it within 2 days; it then has to be deleted and created again.
-
-The `npm` GitHub environment is what limits publishing to `main`: npm's trust
-has no branch field, so without it anyone who can push a branch could publish
-from an edited `release.yml`. Its deployment branches are *Selected branches
-and tags*, with only `main`.
-
-Two consequences worth knowing:
-
-- **Renaming the workflow or the repository breaks publishing.** The trust is
-  bound to the filename `release.yml` and the repository `photon-hq/convex`,
-  and those fields can't be edited: delete the trusted publisher on npmjs.com
-  and create a new one with the new values.
-- **It requires npm >= 11.5.1.** Node 24 ships 11.17.0, so pinning the runner
-  to an older Node would silently fall back to needing a token.
-
-The one repository setting still required: *Settings → Actions → General →
-Allow GitHub Actions to create and approve pull requests*, or the Version
-Packages PR can't be opened.
-
-## Publishing by hand
-
-Only needed for the first release, or if CI is unavailable.
-
-npm trusts a publisher only for a package that already exists, so CI can't
-publish 0.1.0. For that first release, check out the Version Packages PR's
-branch, run the steps below, then merge the PR. `release.yml` then finds 0.1.0
-on npm and publishes nothing, so it also pushes no tag and opens no GitHub
-release: push `v0.1.0` on the merge commit and create the release, with that
-version's `CHANGELOG.md` section as its body, by hand. Add the trusted
-publisher (see Authentication) just before merging the next Version Packages
-PR: a new one expires unless a publish uses it within 2 days.
-
-```sh
-npm run build:clean   # regenerates _generated, then rebuilds
-npm test && npm run check && npm run typecheck
-npm publish --access public
-```
-
-With `auth-and-writes` 2FA this prompts for a one-time password — npm prints a
-URL to approve in a browser, or pass `--otp=<code>` from an authenticator app.
-
-Sanity-check the tarball first if you like:
-
-```sh
-npm pack
-```
-
-Install the resulting `.tgz` into a scratch Convex app and confirm the entry
-points resolve — `@photon-ai/convex`, `/convex.config` and `/test`; the
-type-only `/_generated/component` and `/_generated/component.js` with `tsc` —
-then delete it.
+Renaming either workflow file or the repository breaks publishing: each
+trusted publisher is bound to them, and has to be deleted and created again.
 
 ## What ships
 

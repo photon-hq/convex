@@ -1,0 +1,39 @@
+name: Publish staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+        description: Verify and pack only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-staging
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    uses: photon-hq/buildspace/.github/workflows/package-stage.yml@a2c7ceb710769bb38ead49abbe98f2801d2445bd
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      attestations: write
+      id-token: write
+    with:
+      registry: https://registry.npmjs.org
+      package: "@photon-ai/convex"
+      ci-workflow: ci.yml
+      # The stage job sets up pnpm unless bun-version is set. This repository
+      # installs and builds with npm, so Bun is set up only to skip that step.
+      bun-version: latest
+      install: npm ci
+      verify: npm run check && npm run typecheck && npm test
+      pack: node scripts/pack-release.mjs
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

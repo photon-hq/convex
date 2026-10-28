@@ -225,7 +225,7 @@ is currently Photon's only webhook API version, and its status is still
 
 Later releases read the API versions Photon has in their latest or maintenance
 phase: a version is added when Photon promotes it to latest, and removed in the
-release after it is deprecated, with a note in the changelog. Photon stops
+release after it is deprecated, with a note in its release notes. Photon stops
 delivering to a destination whose API version is deprecated, so move to a
 destination on a newer version before then.
 
