@@ -12,21 +12,22 @@ import { pathToFileURL } from "node:url";
 
 // Buildspace's package-stage workflow runs this twice from the same checkout:
 // for the staging build and for its production candidate. Each run packs the
-// package.json version plus RELEASE_SUFFIX into PACK_DESTINATION and restores
-// package.json. The checks below are the only test the production candidate
-// gets before it is stored.
+// computed RELEASE_VERSION plus RELEASE_SUFFIX into PACK_DESTINATION and
+// restores package.json, whose own version is not used. The checks below are
+// the only test the production candidate gets before it is stored.
 const STABLE_VERSION = /^\d+\.\d+\.\d+$/;
 
 const destination = process.env.PACK_DESTINATION;
 if (!destination) {
   throw new Error("PACK_DESTINATION is required");
 }
+const release = process.env.RELEASE_VERSION ?? "";
+if (!STABLE_VERSION.test(release)) {
+  throw new Error("RELEASE_VERSION must be a stable X.Y.Z version");
+}
 const original = await readFile("package.json", "utf8");
 const manifest = JSON.parse(original);
-if (!STABLE_VERSION.test(manifest.version)) {
-  throw new Error("package.json must declare a stable X.Y.Z version");
-}
-const version = `${manifest.version}${process.env.RELEASE_SUFFIX ?? ""}`;
+const version = `${release}${process.env.RELEASE_SUFFIX ?? ""}`;
 
 try {
   await writeFile(

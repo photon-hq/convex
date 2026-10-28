@@ -17,8 +17,19 @@ on the pushed commit, runs `npm ci` and the checks once, then runs
 - the production candidate, `X.Y.Z`, which it stores beside the staging build
   in a GitHub prerelease named `convex-staging-<staging version>`.
 
-`X.Y.Z` is the `version` in `package.json`. Install a staging build with
-`npm install @photon-ai/convex@staging`.
+Install a staging build with `npm install @photon-ai/convex@staging`.
+
+## Versions
+
+`X.Y.Z` is computed; the `version` in `package.json` is not read. Each staging
+build starts from the latest `vX.Y.Z` release and takes the largest bump that
+the pull requests merged to `main` since then ask for, by their titles
+(Conventional Commits): `feat` bumps the minor version, `type!:` or a
+`BREAKING CHANGE:` line in the description the major version, and anything else
+the patch version. Below 1.0, a breaking change releases `1.0.0`. Merges between
+two promotions don't add up. A `Release-As: X.Y.Z` line in a pull request's
+description raises the version to at least `X.Y.Z`. With no release yet, the
+first version is `0.1.0`.
 
 ## Production: Promote to production
 
@@ -30,9 +41,6 @@ on the pushed commit, runs `npm ci` and the checks once, then runs
 3. The run then waits for a reviewer of the `production` environment.
 4. Once approved, it publishes the stored candidate under `latest`, tags the
    source commit `vX.Y.Z`, and creates the GitHub release.
-
-A version is released once: bump `version` in `package.json` in a pull request
-before the next promotion.
 
 ## Setup
 
