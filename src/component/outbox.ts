@@ -174,12 +174,13 @@ export const enqueue = mutation({
       return { queued: false, reason: "turn-cancelled" };
     }
 
-    const priorForTurn = args.turnId
-      ? await ctx.db
-          .query("outbox")
-          .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
-          .collect()
-      : [];
+    const priorForTurn =
+      args.turnId && isReply(args)
+        ? await ctx.db
+            .query("outbox")
+            .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
+            .collect()
+        : [];
 
     // The read endpoint marks one message read, so fall back to the newest
     // inbound message of this turn when the caller did not name one.
