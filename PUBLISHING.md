@@ -44,19 +44,32 @@ first version is `0.1.0`.
 
 ## Setup
 
-Done once, outside the code:
+Done once, outside the code, in this order:
 
+- **A public repository**: buildspace publishes to npmjs with `--provenance`,
+  and npm doesn't support provenance from private repositories.
 - **GitHub environments** (a repository admin, Settings → Environments):
   `staging` with a branch rule for `main`, and `production` with a required
   reviewer and a branch rule for `main`. Promotion refuses to run until
   `production` has a reviewer.
-- **npm trusted publishers** (an `@photon-ai` maintainer, on npmjs.com): one for
+- **The package on npm** (an `@photon-ai` maintainer): npm trusts a publisher
+  only for a package that already exists, so publish a placeholder version by
+  hand first, from a checkout of `main`. Use `0.0.0`, not `0.1.0`: `0.1.0` is
+  the first version the workflows compute, and promotion refuses a version
+  that is already published with other contents. Until `0.1.0` is promoted,
+  `latest` points to the placeholder.
+
+  ```sh
+  npm pkg set version=0.0.0
+  npm publish --access public
+  git checkout package.json
+  ```
+
+- **npm trusted publishers** (the same maintainer, on npmjs.com): one for
   `publish.yml` with environment `staging`, and one for `promote.yml` with
   environment `production`, each allowing `npm publish` and `npm dist-tag`.
   Both workflows publish through trusted publishing, with provenance and no
-  token. npm trusts a publisher only for a package that already exists, so
-  `@photon-ai/convex` has to be on npm before the first staging build can be
-  published.
+  token.
 
 Renaming either workflow file or the repository breaks publishing: each
 trusted publisher is bound to them, and has to be deleted and created again.
