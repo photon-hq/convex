@@ -7,6 +7,7 @@ import type {
 import {
   createFunctionHandle,
   type FunctionReference,
+  type FunctionReturnType,
   type GenericActionCtx,
   type GenericDataModel,
   type GenericMutationCtx,
@@ -144,11 +145,7 @@ export interface PhotonComponentOptions {
 }
 
 /** The outbox's answer to a queued action. */
-interface Queued {
-  idempotencyKey?: string;
-  queued: boolean;
-  reason?: string;
-}
+type Queued = FunctionReturnType<ComponentApi["outbox"]["enqueue"]>;
 
 export class PhotonComponent {
   readonly component: ComponentApi;
@@ -329,13 +326,7 @@ export class PhotonComponent {
   async getSpace(
     ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string }
-  ): Promise<{
-    spaceId: string;
-    platform: string;
-    senderId?: string;
-    kind?: string;
-    lastInboundAt: number;
-  } | null> {
+  ): Promise<FunctionReturnType<ComponentApi["inbound"]["getSpace"]>> {
     return await ctx.runQuery(this.component.inbound.getSpace, args);
   }
 
@@ -354,18 +345,7 @@ export class PhotonComponent {
   async listOutbox(
     ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string; limit?: number }
-  ): Promise<
-    {
-      idempotencyKey: string;
-      kind: string;
-      status: string;
-      attempts: number;
-      queuedAt: number;
-      sentAt?: number;
-      messageId?: string;
-      lastError?: string;
-    }[]
-  > {
+  ): Promise<FunctionReturnType<ComponentApi["outbox"]["list"]>> {
     return await ctx.runQuery(this.component.outbox.list, args);
   }
 }
