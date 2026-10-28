@@ -184,8 +184,8 @@ export const cancelCurrentTurn = async (
   const turnId = inflight.turnId;
   if (turnId) {
     // A turn counts as answered once the API accepted a reply, or a reply is
-    // already going out: a request in flight can't be recalled, and `claim`
-    // finishes it rather than cancelling it.
+    // already going out: a request in flight can't be recalled, and
+    // `cancelQueuedSends` leaves it to finish, with its retries.
     const queued = await ctx.db
       .query("outbox")
       .withIndex("by_turnId", (q) => q.eq("turnId", turnId))

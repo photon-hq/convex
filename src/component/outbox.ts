@@ -229,13 +229,6 @@ export const claim = internalMutation({
     if (row?.status !== "pending") {
       return null;
     }
-    // Only a row that never went out is cancelled with its turn. One that
-    // was attempted may already have reached the API, and a reply in flight
-    // counted as its turn's answer, so it is finished with retries.
-    if (row.attempts === 0 && !(await turnIsLive(ctx, row.turnId))) {
-      await ctx.db.patch("outbox", row._id, { status: "cancelled" as const });
-      return null;
-    }
 
     const attempt = row.attempts + 1;
     await ctx.db.patch("outbox", row._id, {
