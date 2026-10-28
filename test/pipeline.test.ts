@@ -745,7 +745,7 @@ describe("a message is answered only when its reply actually ships", () => {
     });
   };
 
-  it("keeps an inherited message with the completed turn whose reply is going out", async () => {
+  it("spends an inherited message with the completed turn whose reply is going out", async () => {
     const t = setup();
     const turnId = await inheritingTurn(t);
     await replyInFlight(t, turnId);
@@ -757,13 +757,11 @@ describe("a message is answered only when its reply actually ships", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
     await settle(t);
 
-    // m1 stays with the turn whose reply answers it, instead of reaching m3's.
+    // The reply going out answers m1, so m3's turn does not inherit it.
     const carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
     );
-    expect(carried.map((row) => [row.messageId, row.turnId])).toEqual([
-      ["m1", turnId],
-    ]);
+    expect(carried).toEqual([]);
   });
 
   it("hands an inherited message on when the turn that answered it never completed", async () => {

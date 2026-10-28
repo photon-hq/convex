@@ -83,7 +83,7 @@ const getInflight = async (
  * Move a dead turn's messages into `carried` so the next batch still sees
  * them — the carry-forward rule.
  *
- * `includeAnswered` also rescues rows the handler already marked `handled`.
+ * `includeHandled` also rescues rows the handler already marked `handled`.
  * `completeTurn` runs when the handler *finishes*, but its reply is only
  * queued at that point — a supersession moments later cancels that reply. The
  * message would then be marked answered while its answer never shipped.
@@ -91,10 +91,10 @@ const getInflight = async (
 const carryForwardDrained = async (
   ctx: MutationCtx,
   drained: Doc<"inbound">[],
-  includeAnswered: boolean
+  includeHandled: boolean
 ): Promise<void> => {
   for (const row of drained) {
-    const spent = includeAnswered
+    const spent = includeHandled
       ? row.status !== "drained" && row.status !== "handled"
       : row.status !== "drained";
     if (spent) {
@@ -110,23 +110,29 @@ const carryForwardDrained = async (
 };
 
 /**
- * Hand a dead turn's inherited messages back to the pool.
+ * Settle a dead turn's inherited messages.
  *
  * These were carried in from an *earlier* cancelled turn, so they are not in
- * `inbound` under this turn and `carryForwardDrained` cannot see them.
- * Un-claiming makes the next flush pick them up again — without this, a
- * message is lost the moment two supersessions happen back to back.
+ * `inbound` under this turn and `carryForwardDrained` cannot see them. A turn
+ * that spent them drops them; otherwise un-claiming makes the next flush pick
+ * them up again — without this, a message is lost the moment two
+ * supersessions happen back to back.
  */
 const releaseCarried = async (
   ctx: MutationCtx,
-  turnId: string
+  turnId: string,
+  spent: boolean
 ): Promise<void> => {
   const claimed = await ctx.db
     .query("carried")
     .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
     .collect();
   for (const row of claimed) {
-    await ctx.db.patch("carried", row._id, { turnId: undefined });
+    if (spent) {
+      await ctx.db.delete("carried", row._id);
+    } else {
+      await ctx.db.patch("carried", row._id, { turnId: undefined });
+    }
   }
 };
 
@@ -192,15 +198,12 @@ export const cancelCurrentTurn = async (
       .collect();
 
     await carryForwardDrained(ctx, drained, !answered);
-    // Inherited messages go the way of the turn's own: spent with a reply
-    // when the turn was answered and its handler called `completeTurn`, which
-    // leaves no message `drained`, and handed on otherwise. Released, they
-    // would reach the next turn while the reply that answers them still goes
-    // out.
+    // Inherited messages go the way of the turn's own: spent when the turn
+    // was answered and its handler called `completeTurn`, which leaves no
+    // message `drained`, and handed on otherwise. Handed on, they would reach
+    // the next turn while the reply that answers them still goes out.
     const completed = drained.every((row) => row.status !== "drained");
-    if (!(answered && completed)) {
-      await releaseCarried(ctx, turnId);
-    }
+    await releaseCarried(ctx, turnId, answered && completed);
     await cancelQueuedSends(ctx, queued);
 
     const record = await ctx.db
@@ -291,16 +294,12 @@ export const flush = internalMutation({
           .collect();
     // Inherited context only exists in collapse mode; immediate turns are
     // strictly one message.
-    // Only rows no turn holds: an answered turn keeps its inherited rows until
-    // its reply settles.
     const carriedRows = args.only
       ? []
-      : (
-          await ctx.db
-            .query("carried")
-            .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
-            .collect()
-        ).filter((row) => row.turnId === undefined);
+      : await ctx.db
+          .query("carried")
+          .withIndex("by_spaceId", (q) => q.eq("spaceId", args.spaceId))
+          .collect();
 
     if (queued.length === 0 && carriedRows.length === 0) {
       return null;
