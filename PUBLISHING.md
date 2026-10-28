@@ -9,7 +9,7 @@ nothing is rebuilt.
 ## Staging: every push to `main`
 
 `.github/workflows/publish.yml` (**Publish staging**) waits for `ci.yml` to pass
-on the pushed commit, runs `npm ci` and the checks once, then runs
+on the pushed commit, runs `pnpm install` and the checks once, then runs
 `scripts/pack-release.mjs` twice from the same checkout:
 
 - the staging build, `X.Y.Z-staging.<run id>.<attempt>`, which it publishes to
@@ -85,6 +85,6 @@ maps:
 `src/component/_generated/` is committed and ships as-is. `component.ts` in that
 directory is the `ComponentApi` type the client re-exports, so a stale copy
 ships a type that no longer matches the component's validators. Regenerate with
-`npm run build:codegen` (needs a Convex deployment) and commit it whenever a
+`pnpm run build:codegen` (needs a Convex deployment) and commit it whenever a
 component validator changes. CI regenerates it against a local anonymous backend
 and fails when the committed copy is stale.

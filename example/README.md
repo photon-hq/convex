@@ -10,8 +10,8 @@ whose `convex.json` sets `"functions": "example/convex"`. Run everything from
 the root:
 
 ```sh
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 The first run creates a deployment and regenerates `convex/_generated/` for

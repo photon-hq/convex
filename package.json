@@ -50,18 +50,18 @@
   "types": "./dist/client/index.d.ts",
   "module": "./dist/client/index.js",
   "scripts": {
-    "predev": "npm run build:codegen",
-    "dev": "convex dev --typecheck-components --start 'npm run dev:build'",
-    "dev:build": "chokidar 'tsconfig*.json' 'src/**/*.ts' -i '**/*.test.ts' -c 'npm run build:codegen' --initial",
+    "predev": "pnpm run build:codegen",
+    "dev": "convex dev --typecheck-components --start 'pnpm run dev:build'",
+    "dev:build": "chokidar 'tsconfig*.json' 'src/**/*.ts' -i '**/*.test.ts' -c 'pnpm run build:codegen' --initial",
     "build": "tsc --project tsconfig.build.json",
-    "build:codegen": "convex codegen --component-dir ./src/component && npm run build",
-    "build:clean": "rm -rf dist *.tsbuildinfo && npm run build:codegen",
+    "build:codegen": "convex codegen --component-dir ./src/component && pnpm run build",
+    "build:clean": "rm -rf dist *.tsbuildinfo && pnpm run build:codegen",
     "check": "biome check .",
     "fix": "biome check --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p example/convex",
-    "prepare": "npm run build"
+    "prepare": "pnpm run build"
   },
   "dependencies": {
     "@photon-ai/api": "^0.6.0",
@@ -79,7 +79,9 @@
     "convex-test": "^0.0.56",
     "typescript": "^5.9.0",
     "ultracite": "7.8.4",
+    "vite": "^8.2.2",
     "vitest": "^4.1.9"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "packageManager": "pnpm@11.13.1"
 }

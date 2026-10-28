@@ -254,29 +254,30 @@ under if you changed it in `convex.config.ts`.
 
 ## Development
 
-This is a single npm package: the root `package.json` owns both the component
-and the example app in `example/`, and root `convex.json` points `functions` at
-`example/convex`. There is no separate install inside `example/`.
+This is a single npm package, installed with pnpm: the root `package.json` owns
+both the component and the example app in `example/`, and root `convex.json`
+points `functions` at `example/convex`. There is no separate install inside
+`example/`.
 
 ```sh
-npm install
-npm run dev       # codegen + build in watch, alongside `convex dev`
+pnpm install
+pnpm run dev      # codegen + build in watch, alongside `convex dev`
 ```
 
-`npm run dev` runs three things the component needs in order — component
+`pnpm run dev` runs three things the component needs in order — component
 codegen, the package build, then `convex dev --typecheck-components` against the
 example app. To do a one-off instead:
 
 ```sh
-npm run build:codegen   # convex codegen + tsc
-npm test
-npm run typecheck       # package and example/convex
-npm run check           # biome
+pnpm run build:codegen  # convex codegen + tsc
+pnpm test
+pnpm run typecheck      # package and example/convex
+pnpm run check          # biome
 ```
 
 `src/component/_generated/` is committed. It holds `component.ts`, the
 `ComponentApi` type the client re-exports, so regenerate and commit it whenever
-a component validator changes — `npm run build:codegen` does both.
+a component validator changes — `pnpm run build:codegen` does both.
 
 Publishing is documented in [PUBLISHING.md](./PUBLISHING.md).
 

@@ -31,10 +31,6 @@ jobs:
       registry: https://registry.npmjs.org
       package: "@photon-ai/convex"
       ci-workflow: ci.yml
-      # The stage job sets up pnpm unless bun-version is set. This repository
-      # installs and builds with npm, so Bun is set up only to skip that step.
-      bun-version: latest
-      install: npm ci
-      verify: npm run check && npm run typecheck && npm test
+      verify: pnpm run check && pnpm run typecheck && pnpm test
       pack: node scripts/pack-release.mjs
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

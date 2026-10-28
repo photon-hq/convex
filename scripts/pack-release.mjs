@@ -34,7 +34,7 @@ try {
     "package.json",
     `${JSON.stringify({ ...manifest, version }, null, 2)}\n`
   );
-  execFileSync("npm", ["run", "build"], { stdio: "inherit" });
+  execFileSync("pnpm", ["run", "build"], { stdio: "inherit" });
   execFileSync(
     "npm",
     ["pack", "--ignore-scripts", "--pack-destination", destination],
