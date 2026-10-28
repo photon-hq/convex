@@ -28,11 +28,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Install also builds dist/, through `prepare`. `typecheck` needs it: it
+      # covers example/convex, which imports `@photon-ai/convex` by package
+      # self-reference and so resolves through `exports` into dist/.
       - run: pnpm install --frozen-lockfile
-      # Build first: `typecheck` covers example/convex, which imports
-      # `@photon-ai/convex` by package self-reference and so resolves through
-      # `exports` into dist/.
-      - run: pnpm run build
       - run: pnpm run check
       - run: pnpm run typecheck
       - run: pnpm test
