@@ -188,8 +188,9 @@ export const enqueue = mutation({
       const newest = await ctx.db
         .query("inbound")
         .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
-        .collect();
-      targetMessageId = newest.at(-1)?.messageId;
+        .order("desc")
+        .first();
+      targetMessageId = newest?.messageId;
     }
 
     const rowId = await ctx.db.insert("outbox", {

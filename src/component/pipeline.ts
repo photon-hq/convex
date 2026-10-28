@@ -134,16 +134,12 @@ const releaseCarried = async (
   }
 };
 
-/** Stop a dead turn's queued sends from going out. */
+/** Stop a dead turn's queued sends, given all of its outbox rows. */
 const cancelQueuedSends = async (
   ctx: MutationCtx,
-  turnId: string
+  rows: Doc<"outbox">[]
 ): Promise<void> => {
-  const queued = await ctx.db
-    .query("outbox")
-    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-    .collect();
-  for (const row of queued) {
+  for (const row of rows) {
     if (row.status !== "pending") {
       continue;
     }
@@ -197,7 +193,7 @@ export const cancelCurrentTurn = async (
 
     await carryForwardDrained(ctx, turnId, !answered);
     await releaseCarried(ctx, turnId);
-    await cancelQueuedSends(ctx, turnId);
+    await cancelQueuedSends(ctx, queued);
 
     const record = await ctx.db
       .query("turns")
@@ -323,41 +319,35 @@ export const flush = internalMutation({
       status: "live" as const,
     });
 
+    // With no handler wired up, the messages are still durable and marked
+    // drained, so a later turn carries them forward rather than losing them.
+    const handlerJobId = args.onTurn
+      ? await ctx.scheduler.runAfter(0, args.onTurn as TurnHandler, {
+          spaceId: args.spaceId,
+          turnId,
+          messages: queued.map((row) => row.message),
+          carried,
+        })
+      : undefined;
+
     // `inflight` models the single current turn, which only makes sense when
     // turns supersede each other. Immediate turns are independent, so they are
-    // deliberately not registered there.
-    if (!args.only) {
-      const inflight = await getInflight(ctx, args.spaceId);
-      const inflightId =
-        inflight?._id ??
-        (await ctx.db.insert("inflight", { spaceId: args.spaceId }));
-      await ctx.db.patch("inflight", inflightId, {
-        turnId,
-        flushJobId: undefined,
-      });
-    }
-
-    if (!args.onTurn) {
-      // No handler wired up: the messages are still durable and marked
-      // drained, so a later turn carries them forward rather than losing them.
-      return null;
-    }
-
-    const handlerJobId = await ctx.scheduler.runAfter(
-      0,
-      args.onTurn as TurnHandler,
-      {
-        spaceId: args.spaceId,
-        turnId,
-        messages: queued.map((row) => row.message),
-        carried,
-      }
-    );
-    // Only collapse turns are cancellable, so only they track the handler job.
+    // deliberately not registered there; only collapse turns are cancellable,
+    // so only they track the handler job.
     if (!args.only) {
       const inflight = await getInflight(ctx, args.spaceId);
       if (inflight) {
-        await ctx.db.patch("inflight", inflight._id, { handlerJobId });
+        await ctx.db.patch("inflight", inflight._id, {
+          turnId,
+          flushJobId: undefined,
+          handlerJobId,
+        });
+      } else {
+        await ctx.db.insert("inflight", {
+          spaceId: args.spaceId,
+          turnId,
+          ...(handlerJobId === undefined ? {} : { handlerJobId }),
+        });
       }
     }
     return null;
