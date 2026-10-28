@@ -189,7 +189,7 @@ export class PhotonComponent {
     return {
       projectId: this.projectId,
       apiKey: this.apiKey,
-      ...(this.baseUrl === undefined ? {} : { baseUrl: this.baseUrl }),
+      baseUrl: this.baseUrl,
     };
   }
 
@@ -233,17 +233,13 @@ export class PhotonComponent {
           messageId: message.messageId,
           platform: message.platform,
           message: message.message,
-          ...(message.senderId === undefined
-            ? {}
-            : { senderId: message.senderId }),
-          ...(message.kind === undefined ? {} : { kind: message.kind }),
+          senderId: message.senderId,
+          kind: message.kind,
           triggersTurn: message.triggersTurn,
           mode: this.options.mode ?? "immediate",
           raw: message.raw,
-          ...(this.options.debounceMs === undefined
-            ? {}
-            : { debounceMs: this.options.debounceMs }),
-          ...(onTurn === undefined ? {} : { onTurn }),
+          debounceMs: this.options.debounceMs,
+          onTurn,
         });
 
         return new Response("ok", { status: OK_STATUS });
@@ -290,12 +286,10 @@ export class PhotonComponent {
       spaceId: args.spaceId,
       kind: "sendMessage" as const,
       content: args.content,
-      ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
-      ...(args.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: args.parentMessageId }),
-      ...(args.email === undefined ? {} : { email: args.email }),
-      ...(args.telegram === undefined ? {} : { telegram: args.telegram }),
+      turnId: args.turnId,
+      parentMessageId: args.parentMessageId,
+      email: args.email,
+      telegram: args.telegram,
       pacingMs: args.pacingMs ?? this.options.pacingMs ?? 0,
       ...this.credentials(),
     });

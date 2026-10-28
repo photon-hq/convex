@@ -102,8 +102,8 @@ export const enqueue = mutation({
     await upsertSpace(ctx, {
       spaceId: args.spaceId,
       platform: args.platform,
-      ...(args.senderId === undefined ? {} : { senderId: args.senderId }),
-      ...(args.kind === undefined ? {} : { kind: args.kind }),
+      senderId: args.senderId,
+      kind: args.kind,
     });
 
     // Signals (read receipts, typing) are recorded for visibility but never
@@ -117,7 +117,7 @@ export const enqueue = mutation({
       message: args.message,
       queuedAt: now,
       status: triggersTurn ? ("queued" as const) : ("handled" as const),
-      ...(args.raw === undefined ? {} : { raw: args.raw }),
+      raw: args.raw,
     });
 
     if (!triggersTurn) {
@@ -133,7 +133,7 @@ export const enqueue = mutation({
       await scheduleFlush(ctx, {
         spaceId: args.spaceId,
         debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
-        ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
+        onTurn: args.onTurn,
         only: rowId,
       });
       return { deduped: false };
@@ -144,7 +144,7 @@ export const enqueue = mutation({
     const flushJobId = await scheduleFlush(ctx, {
       spaceId: args.spaceId,
       debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
-      ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
+      onTurn: args.onTurn,
     });
     const cancelledTurn = await cancelCurrentTurn(
       ctx,
@@ -154,7 +154,7 @@ export const enqueue = mutation({
 
     return {
       deduped: false,
-      ...(cancelledTurn === undefined ? {} : { cancelledTurn }),
+      cancelledTurn,
     };
   },
 });
@@ -192,8 +192,8 @@ export const getSpace = query({
     return {
       spaceId: space.spaceId,
       platform: space.platform,
-      ...(space.senderId === undefined ? {} : { senderId: space.senderId }),
-      ...(space.kind === undefined ? {} : { kind: space.kind }),
+      senderId: space.senderId,
+      kind: space.kind,
       lastInboundAt: newest?.queuedAt ?? space._creationTime,
     };
   },

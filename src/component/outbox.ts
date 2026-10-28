@@ -147,7 +147,7 @@ export const enqueue = mutation({
       await saveConfig(ctx, {
         projectId: args.projectId,
         apiKey: args.apiKey,
-        ...(args.baseUrl === undefined ? {} : { baseUrl: args.baseUrl }),
+        baseUrl: args.baseUrl,
       });
     }
 
@@ -177,15 +177,13 @@ export const enqueue = mutation({
 
     const rowId = await ctx.db.insert("outbox", {
       spaceId: args.spaceId,
-      ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
+      turnId: args.turnId,
       kind: args.kind,
-      ...(args.content === undefined ? {} : { content: args.content }),
-      ...(args.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: args.parentMessageId }),
-      ...(args.email === undefined ? {} : { email: args.email }),
-      ...(args.telegram === undefined ? {} : { telegram: args.telegram }),
-      ...(targetMessageId === undefined ? {} : { targetMessageId }),
+      content: args.content,
+      parentMessageId: args.parentMessageId,
+      email: args.email,
+      telegram: args.telegram,
+      targetMessageId,
       status: "pending" as const,
       attempts: 0,
       queuedAt: Date.now(),
@@ -256,23 +254,17 @@ export const loadJob = internalQuery({
       spaceId: row.spaceId,
       idempotencyKey: row._id,
       kind: row.kind,
-      ...(row.content === undefined ? {} : { content: row.content }),
-      ...(row.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: row.parentMessageId }),
-      ...(row.email === undefined ? {} : { email: row.email }),
-      ...(row.telegram === undefined ? {} : { telegram: row.telegram }),
-      ...(row.targetMessageId === undefined
-        ? {}
-        : { targetMessageId: row.targetMessageId }),
-      ...(space?.senderId === undefined ? {} : { senderId: space.senderId }),
+      content: row.content,
+      parentMessageId: row.parentMessageId,
+      email: row.email,
+      telegram: row.telegram,
+      targetMessageId: row.targetMessageId,
+      senderId: space?.senderId,
       config: config
         ? {
             projectId: config.projectId,
             apiKey: config.apiKey,
-            ...(config.baseUrl === undefined
-              ? {}
-              : { baseUrl: config.baseUrl }),
+            baseUrl: config.baseUrl,
           }
         : null,
     };
@@ -409,9 +401,9 @@ const toOutboxRow = (row: Doc<"outbox">) => ({
   status: row.status,
   attempts: row.attempts,
   queuedAt: row.queuedAt,
-  ...(row.sentAt === undefined ? {} : { sentAt: row.sentAt }),
-  ...(row.messageId === undefined ? {} : { messageId: row.messageId }),
-  ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
+  sentAt: row.sentAt,
+  messageId: row.messageId,
+  lastError: row.lastError,
 });
 
 /**

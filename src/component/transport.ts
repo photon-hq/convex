@@ -100,9 +100,7 @@ const run = async (job: Job): Promise<Outcome> => {
   // Created per run, so the client picks up the current `fetch`. Retries are
   // the outbox's job, so the client's own are off.
   const photon = new Photon({
-    ...(job.config.baseUrl === undefined
-      ? {}
-      : { baseUrl: job.config.baseUrl }),
+    baseUrl: job.config.baseUrl,
     headers: { Authorization: `Bearer ${job.config.apiKey}` },
     retry: false,
   });
@@ -139,11 +137,9 @@ const run = async (job: Job): Promise<Outcome> => {
           spaceId: job.spaceId,
           senderId: job.senderId,
           content: job.content,
-          ...(job.parentMessageId === undefined
-            ? {}
-            : { parentMessageId: job.parentMessageId }),
-          ...(job.email === undefined ? {} : { email: job.email }),
-          ...(job.telegram === undefined ? {} : { telegram: job.telegram }),
+          parentMessageId: job.parentMessageId,
+          email: job.email,
+          telegram: job.telegram,
         },
       })
     );

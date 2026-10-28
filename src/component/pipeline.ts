@@ -254,8 +254,8 @@ export const scheduleFlush = async (
 ): Promise<Id<"_scheduled_functions">> =>
   await ctx.scheduler.runAfter(args.debounceMs, internal.pipeline.flush, {
     spaceId: args.spaceId,
-    ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
-    ...(args.only === undefined ? {} : { only: args.only }),
+    onTurn: args.onTurn,
+    only: args.only,
   });
 
 /**
@@ -356,7 +356,7 @@ export const flush = internalMutation({
         await ctx.db.insert("inflight", {
           spaceId: args.spaceId,
           turnId,
-          ...(handlerJobId === undefined ? {} : { handlerJobId }),
+          handlerJobId,
         });
       }
     }
