@@ -22,7 +22,6 @@ const messageArgs = {
   platform: v.string(),
   // The Photon `Message` (`data.object` of the event).
   message: v.any(),
-  raw: v.optional(v.any()),
   triggersTurn: v.optional(v.boolean()),
   // The agent's own user in this space (`receivedBy.id`); replies send as it.
   senderId: v.optional(v.string()),
@@ -85,10 +84,7 @@ export const enqueue = mutation({
     // time so the app can change or version its handler without a migration.
     onTurn: v.optional(v.string()),
   },
-  returns: v.object({
-    deduped: v.boolean(),
-    cancelledTurn: v.optional(v.string()),
-  }),
+  returns: v.object({ deduped: v.boolean() }),
   handler: async (ctx, args) => {
     const duplicate = await ctx.db
       .query("inbound")
@@ -113,11 +109,9 @@ export const enqueue = mutation({
     const rowId = await ctx.db.insert("inbound", {
       spaceId: args.spaceId,
       messageId: args.messageId,
-      platform: args.platform,
       message: args.message,
       queuedAt: now,
       status: triggersTurn ? ("queued" as const) : ("handled" as const),
-      raw: args.raw,
     });
 
     if (!triggersTurn) {
@@ -146,16 +140,8 @@ export const enqueue = mutation({
       debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
       onTurn: args.onTurn,
     });
-    const cancelledTurn = await cancelCurrentTurn(
-      ctx,
-      args.spaceId,
-      flushJobId
-    );
-
-    return {
-      deduped: false,
-      cancelledTurn,
-    };
+    await cancelCurrentTurn(ctx, args.spaceId, flushJobId);
+    return { deduped: false };
   },
 });
 

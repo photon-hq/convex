@@ -67,7 +67,6 @@ export default defineSchema({
     // Photon message id (`pho_msg_…`). Webhook deliveries are at-least-once,
     // so this is the dedupe key.
     messageId: v.string(),
-    platform: v.string(),
     message,
     // When the component stored it. Not `receivedAt`, which would read as the
     // message's own `timestamps.receivedAt`.
@@ -75,8 +74,6 @@ export default defineSchema({
     status: inboundStatus,
     // Set when a turn drains this row, so cancellation can find its messages.
     turnId: v.optional(v.string()),
-    // The rest of the event, without `data.object` (stored above as `message`).
-    raw: v.optional(v.any()),
   })
     .index("by_messageId", ["messageId"])
     .index("by_spaceId_and_queuedAt", ["spaceId", "queuedAt"])

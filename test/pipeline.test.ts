@@ -419,7 +419,6 @@ describe("listing", () => {
         await ctx.db.insert("inbound", {
           spaceId: "chat-1",
           messageId: `m${i + 1}`,
-          platform: "imessage",
           message: {},
           queuedAt: i + 1,
           status,

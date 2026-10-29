@@ -171,14 +171,12 @@ const cancelQueuedSends = async (
  * sees them. `ctx.scheduler.cancel` cannot stop an action that is already
  * running — that case is handled cooperatively by `isCancelled`, which a
  * running handler polls between steps.
- *
- * Returns the cancelled turn id, if there was one.
  */
 export const cancelCurrentTurn = async (
   ctx: MutationCtx,
   spaceId: string,
   flushJobId?: Id<"_scheduled_functions">
-): Promise<string | undefined> => {
+): Promise<void> => {
   const inflight = await getInflight(ctx, spaceId);
   if (!inflight) {
     if (flushJobId) {
@@ -234,7 +232,6 @@ export const cancelCurrentTurn = async (
     flushJobId,
     handlerJobId: undefined,
   });
-  return turnId;
 };
 
 /**

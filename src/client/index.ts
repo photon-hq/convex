@@ -237,7 +237,6 @@ export class PhotonComponent {
           kind: message.kind,
           triggersTurn: message.triggersTurn,
           mode: this.options.mode ?? "immediate",
-          raw: message.raw,
           debounceMs: this.options.debounceMs,
           onTurn,
         });

@@ -198,17 +198,6 @@ describe("parseWebhook: event", () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.ok && outcome.message.triggersTurn).toBe(false);
   });
-
-  it("keeps data.object only in message, and the rest of the event in raw", () => {
-    const object = receivedMessage();
-    const delivered = event(object);
-    const outcome = signed(delivered);
-    expect(outcome.ok && outcome.message.message).toEqual(object);
-    expect(outcome.ok && outcome.message.raw).toEqual({
-      ...delivered,
-      data: { projectId: PROJECT_ID },
-    });
-  });
 });
 
 describe("the webhook route", () => {

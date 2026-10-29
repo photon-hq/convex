@@ -23,8 +23,6 @@ export interface InboundMessage {
   message: Message;
   messageId: string;
   platform: string;
-  /** The rest of the event: everything but `data.object`, which is `message`. */
-  raw: unknown;
   /**
    * The agent's own user in this space (`receivedBy.id`). Replies are sent as
    * this user, and it is only ever learned from inbound.
@@ -169,9 +167,6 @@ export function parseWebhook(input: {
   const senderId = asString(asObject(object.receivedBy)?.id);
   const kind = asString(space?.kind);
   const contentType = asString(asObject(object.content)?.type);
-  // `data.object` is already `message`. A second copy in `raw` would double
-  // the row, and Convex rejects a document over 1 MiB.
-  const { object: _, ...data } = asObject(event.data) ?? {};
   return {
     ok: true,
     message: {
@@ -184,7 +179,6 @@ export function parseWebhook(input: {
       triggersTurn: !(
         contentType !== undefined && SIGNAL_CONTENT_TYPES.has(contentType)
       ),
-      raw: { ...event, data },
     },
   };
 }
