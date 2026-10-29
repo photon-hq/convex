@@ -205,8 +205,8 @@ messages are stored and handed to your handler like any other message.
 
 | Method | Returns |
 |---|---|
-| `photon.listMessages(ctx, { spaceId, limit? })` | The space's most recent received messages (50 by default), oldest first, as `{ messageId, message, queuedAt, status }`. `message` is the Photon `Message`. `status` is `queued` until a turn takes the message, `drained` while that turn is open, then `handled`; read receipts and typing indicators are stored `handled`. |
-| `photon.getSpace(ctx, { spaceId })` | The space's `platform`, its `kind` (for example `direct` or `group`), the agent's own user in it (`senderId`) and when its newest message was stored (`lastInboundAt`), or `null` for a space that has never received a message. |
+| `photon.listMessages(ctx, { spaceId, limit? })` | The space's most recent received messages (50 by default), oldest first, as `{ messageId, message, queuedAt, status }`. `message` is the Photon `Message`. `status` is `queued` until a turn takes the message, then `drained` until that turn completes (`completeTurn`) or is superseded, then `handled`; read receipts and typing indicators are stored `handled`. |
+| `photon.getSpace(ctx, { spaceId })` | The space's `platform`, `kind` (for example `direct` or `group`), `senderId` (the agent's own user in it) and `lastInboundAt` (when its newest message was stored), or `null` for a space that has never received a message. `kind` and `senderId` stay absent until a received message carries them, and a space without a `senderId` can't be sent to (see [Sending](#sending)). |
 
 ## The webhook endpoint
 
