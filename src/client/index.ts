@@ -183,11 +183,9 @@ export class PhotonComponent {
    * after the response — on Convex the isolate is frozen once the response is
    * returned.
    */
-  registerRoutes(http: HttpRouter, opts: { path?: string } = {}): void {
-    const path = opts.path ?? this.options.webhookPath ?? DEFAULT_WEBHOOK_PATH;
-
+  registerRoutes(http: HttpRouter): void {
     http.route({
-      path,
+      path: this.options.webhookPath ?? DEFAULT_WEBHOOK_PATH,
       method: "POST",
       handler: httpActionGeneric(async (ctx, request) => {
         const secret = this.secret();
