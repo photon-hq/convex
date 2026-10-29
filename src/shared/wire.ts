@@ -174,8 +174,8 @@ export function parseWebhook(input: {
       messageId,
       platform,
       message: object as Message,
-      ...(senderId === undefined ? {} : { senderId }),
-      ...(kind === undefined ? {} : { kind }),
+      senderId,
+      kind,
       triggersTurn: !(
         contentType !== undefined && SIGNAL_CONTENT_TYPES.has(contentType)
       ),
