@@ -151,6 +151,12 @@ A turn's replies go out one at a time, in the order they were queued, each
 after the first at least `pacingMs` after the one before it. Read receipts and
 reactions are never held back or delayed, and don't count as replies.
 
+Replies of different turns are not ordered against each other. In immediate
+mode every message is its own turn, and turns can run at the same time, so
+replies to messages that arrive close together can go out in a different order
+than the messages did. To answer a burst with one turn instead, use collapse
+mode.
+
 ### Guarantees in both modes
 
 - **At-least-once deliveries are deduped** on the message id.
