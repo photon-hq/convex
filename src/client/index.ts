@@ -19,11 +19,8 @@ import type { ComponentApi } from "../component/_generated/component.js";
 import { parseWebhook } from "../shared/wire.js";
 
 /**
- * App-facing client for the Photon component.
- *
- * Wraps the component's functions for app code, and runs in the app's own
- * environment — which is what gives it access to the app's `PHOTON_*`
- * environment variables (a component cannot read the app's env vars).
+ * App-facing client for the Photon component. It runs in the app, so it can
+ * read the app's `PHOTON_*` environment variables, which the component cannot.
  */
 
 const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
@@ -33,12 +30,11 @@ const SERVER_ERROR_STATUS = 500;
 /** The turn a handler is invoked with — one conversational exchange. */
 export interface Turn {
   /**
-   * Messages a previous, cancelled turn had already drained. Present them as
-   * earlier context rather than fresh input — the user has been waiting on
-   * these longer than the ones in `messages`.
+   * Messages a cancelled turn had drained, older than `messages`: present them
+   * as earlier context.
    */
   carried: Message[];
-  /** Messages from this burst, oldest first. */
+  /** Messages from this turn, oldest first. */
   messages: Message[];
   spaceId: string;
   turnId: string;
@@ -67,16 +63,12 @@ type ActionCtx = Pick<
 /**
  * How inbound messages become turns.
  *
- * - `"immediate"` (default) — every message is handled on its own. No batching,
- *   no waiting, no supersession. Simple and predictable: N messages produce N
- *   handler calls. `turn.messages` always has exactly one entry and
- *   `turn.carried` is always empty.
- *
- * - `"collapse"` — a burst becomes one turn. A new message supersedes the
- *   in-flight turn, cancels any reply that has not shipped, and carries its
- *   messages into the next one as prior context. Use when replies are expensive
- *   (an LLM call) or when answering each message separately would read as the
- *   agent talking over itself.
+ * - `"immediate"` (default): every message is its own turn, so `messages` has
+ *   one entry and `carried` is empty.
+ * - `"collapse"`: a burst becomes one turn. A new message supersedes the turn
+ *   in flight, cancels its unsent replies and carries its messages into the
+ *   next turn. For replies that are expensive, such as an LLM call, or that
+ *   would talk over each other.
  */
 export type TurnMode = "immediate" | "collapse";
 
@@ -89,11 +81,9 @@ export interface PhotonComponentOptions {
    */
   baseUrl?: string;
   /**
-   * Settling window before a turn is handled. Only meaningful in `"collapse"`
-   * mode, where it widens the window in which a follow-up can join the same
-   * turn. It is a latency cost on every reply, so leave it at 0 unless you
-   * specifically need tighter grouping — cancellation already collapses most
-   * bursts on its own.
+   * Wait before each turn, in either mode. In `"collapse"` mode a follow-up
+   * that lands within it joins the turn, though cancellation already merges
+   * most bursts without it. It delays every reply.
    *
    * @default 0
    */
@@ -110,9 +100,8 @@ export interface PhotonComponentOptions {
    */
   onTurn?: FunctionReference<"action" | "mutation", "internal" | "public">;
   /**
-   * Gap between a turn's replies. They go out one at a time, in the order they
-   * were queued, each after the first at least `pacingMs` after the one before
-   * it. Read receipts and reactions are never held back or delayed.
+   * Gap between a turn's replies, which go out one at a time in the order they
+   * were queued. Read receipts and reactions are never delayed.
    */
   pacingMs?: number;
   /** Photon project id (`pho_prj_…`). Falls back to `process.env.PHOTON_PROJECT_ID`. */
@@ -154,10 +143,7 @@ export class PhotonComponent {
       : undefined;
   }
 
-  /**
-   * The credentials every send carries to the component, which keeps the
-   * latest in its `config` table for the send jobs.
-   */
+  /** The credentials every send passes to the component. */
   private credentials(): {
     projectId: string;
     apiKey: string;

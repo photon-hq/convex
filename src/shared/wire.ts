@@ -2,11 +2,8 @@ import type { Message } from "@photon-ai/api";
 import { Webhook, WebhookVerificationError } from "standardwebhooks";
 
 /**
- * The wire boundary, shared by the HTTP entry point and the tests.
- *
- * Everything here runs in Convex's default runtime, which has no Node
- * builtins. `standardwebhooks` qualifies: it is plain JavaScript on top of two
- * pure-JS packages (`fast-sha256`, `@stablelib/base64`).
+ * Webhook verification and parsing. It runs in Convex's default runtime,
+ * which has no Node builtins; `standardwebhooks` is plain JavaScript.
  */
 
 /**
@@ -23,20 +20,13 @@ export interface InboundMessage {
   message: Message;
   messageId: string;
   platform: string;
-  /**
-   * The agent's own user in this space (`receivedBy.id`). Replies are sent as
-   * this user, and it is only ever learned from inbound.
-   */
+  /** The agent's own user in the space (`receivedBy.id`). */
   senderId?: string;
   spaceId: string;
   /**
-   * Whether this delivery should start a conversational turn.
-   *
-   * False for signals — read receipts, typing indicators — which describe the
-   * conversation rather than being input to it. They are stored, but must not
-   * arm the debounce or feed a turn: a bot that replies to the read receipt
-   * for its own last message generates the next read receipt, and echoes
-   * forever.
+   * False for read receipts and typing indicators. They are stored but start
+   * no turn: a bot that answered the read receipt for its own reply would
+   * echo forever.
    */
   triggersTurn: boolean;
 }
@@ -44,10 +34,8 @@ export interface InboundMessage {
 export type ParseOutcome =
   | { ok: true; message: InboundMessage }
   | { ok: false; status: number; reason: string }
-  // A well-formed delivery we deliberately acknowledge without storing (an
-  // event type other than `message.received`, or a message we can't route).
-  // Nothing about the delivery is wrong, so it must not show up as a failed
-  // delivery.
+  // Acknowledged without storing: another event type, or a message with no
+  // space. Nothing is wrong with the delivery, so it gets a 200.
   | { ok: false; status: 200; reason: string; acknowledged: true };
 
 const SIGNATURE_INVALID_STATUS = 401;

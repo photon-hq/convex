@@ -120,12 +120,9 @@ const sendNextReply = async (
 };
 
 /**
- * Queue one outbound action.
- *
- * Rejects (without writing) when the queueing turn has already been
- * superseded — the guard that stops a cancelled turn from talking over the
- * turn that replaced it. A turn's replies go out one at a time, in the order
- * they were queued, each at least `pacingMs` after the one before it.
+ * Queue one outbound action, unless its turn has been superseded. A turn's
+ * replies go out one at a time, in order, each at least `pacingMs` after the
+ * one before.
  */
 export const enqueue = mutation({
   args: {
@@ -290,9 +287,6 @@ const retryOrFail = async (
     return;
   }
 
-  // Same idempotency key on the retry, so a `sendMessage` or
-  // `markMessageRead` that actually landed before the error is answered with
-  // its original result instead of being carried out twice.
   const delay = BASE_RETRY_DELAY_MS * RETRY_BACKOFF_FACTOR ** row.attempts;
   const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
     rowId: row._id,
@@ -326,10 +320,8 @@ export const settle = internalMutation({
         ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
       });
 
-      // The API accepted a reply, so this turn's inherited messages are
-      // finally spent. Doing it here rather than when the handler finishes is
-      // what makes the pipeline lossless: until a reply goes out, every
-      // message stays recoverable by the next turn.
+      // A reply went out, so the turn's inherited messages are spent. Until
+      // then, the next turn could still need them.
       if (isReply(row) && row.turnId) {
         const inherited = await ctx.db
           .query("carried")
