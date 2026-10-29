@@ -180,7 +180,7 @@ to the deployment's dashboard can read the API key**.
 |---|---|
 | `photon.sendMessage(ctx, { spaceId, content, turnId?, parentMessageId?, email?, telegram?, pacingMs? })` | `sendMessage` — `content` is the API's send content, e.g. `{ type: "text", format: "plain", text }` or `format: "markdown"`. `parentMessageId` makes it a reply; `email` and `telegram` are the platform options. |
 | `photon.markMessageRead(ctx, { spaceId, turnId })` | `markMessageRead` on the turn's newest message |
-| `ctx.runMutation(components.photon.outbox.enqueue, { spaceId, turnId, kind: "setSpaceTyping" })` | `setSpaceTyping` (typing on). Uses the credentials the last send stored; to set them, pass `projectId`, `apiKey` and, if you use one, `baseUrl` together. |
+| `photon.setSpaceTyping(ctx, { spaceId, turnId? })` | `setSpaceTyping` (typing on) |
 
 Replies are sent as the agent's own user in the space — the `receivedBy` of the
 incoming messages. A space that has never received a message with `receivedBy`

@@ -87,6 +87,19 @@ const startTurn = async (
 const outbox = async (t: ReturnType<typeof setup>) =>
   await t.query(api.outbox.list, { spaceId: SPACE_ID });
 
+/** A client whose ctx runs the component's own functions in `t`. */
+const client = (
+  t: ReturnType<typeof setup>,
+  options: ConstructorParameters<typeof PhotonComponent>[1]
+) => {
+  const photon = new PhotonComponent(api as unknown as ComponentApi, options);
+  const ctx = {
+    runMutation: (reference: unknown, args: unknown) =>
+      t.mutation(reference as typeof api.outbox.enqueue, args as never),
+  } as unknown as Parameters<PhotonComponent["sendMessage"]>[0];
+  return { photon, ctx };
+};
+
 describe("requests", () => {
   it.each([
     ["a plain message", {}, {}],
@@ -181,13 +194,9 @@ describe("requests", () => {
       )
     );
     const turnId = await startTurn(t);
+    const { photon, ctx } = client(t, credentials);
 
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "setSpaceTyping" as const,
-      ...credentials,
-    });
+    await photon.setSpaceTyping(ctx, { spaceId: SPACE_ID, turnId });
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(1);
@@ -445,19 +454,6 @@ describe("recovery", () => {
 });
 
 describe("credentials", () => {
-  /** A client whose ctx runs the component's own functions in `t`. */
-  const client = (
-    t: ReturnType<typeof setup>,
-    options: ConstructorParameters<typeof PhotonComponent>[1]
-  ) => {
-    const photon = new PhotonComponent(api as unknown as ComponentApi, options);
-    const ctx = {
-      runMutation: (reference: unknown, args: unknown) =>
-        t.mutation(reference as typeof api.outbox.enqueue, args as never),
-    } as unknown as Parameters<PhotonComponent["sendMessage"]>[0];
-    return { photon, ctx };
-  };
-
   const config = async (t: ReturnType<typeof setup>) =>
     await t.run(async (ctx) => await ctx.db.query("config").collect());
 
@@ -513,6 +509,9 @@ describe("credentials", () => {
     ).rejects.toThrow(MISSING_CREDENTIALS);
     await expect(
       photon.markMessageRead(ctx, { spaceId: SPACE_ID, turnId: "turn-1" })
+    ).rejects.toThrow(MISSING_CREDENTIALS);
+    await expect(
+      photon.setSpaceTyping(ctx, { spaceId: SPACE_ID })
     ).rejects.toThrow(MISSING_CREDENTIALS);
     expect(await outbox(t)).toHaveLength(0);
   });

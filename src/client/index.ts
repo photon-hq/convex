@@ -286,6 +286,19 @@ export class PhotonComponent {
     });
   }
 
+  /** Show the agent typing in a space. Rejected if the turn was superseded. */
+  async setSpaceTyping(
+    ctx: MutationCtx | ActionCtx,
+    args: { spaceId: string; turnId?: string }
+  ): Promise<Queued> {
+    return await ctx.runMutation(this.component.outbox.enqueue, {
+      spaceId: args.spaceId,
+      kind: "setSpaceTyping" as const,
+      turnId: args.turnId,
+      ...this.credentials(),
+    });
+  }
+
   /** Mark a turn's messages handled. Call when the handler finishes. */
   async completeTurn(
     ctx: MutationCtx | ActionCtx,
