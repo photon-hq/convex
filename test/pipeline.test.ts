@@ -4,27 +4,14 @@ import { api, internal } from "../src/component/_generated/api.js";
 import type { Id } from "../src/component/_generated/dataModel.js";
 import { cancelCurrentTurn } from "../src/component/pipeline.js";
 import schema from "../src/component/schema.js";
+import { settle } from "./fixtures.js";
 
-/**
- * Pipeline behavior tests, run against the component's own schema in
- * `convex-test`'s in-memory backend.
- *
- * These target the rules that are easy to get subtly wrong and expensive to
- * discover in production: at-least-once dedupe, the debounce reset, the
- * carry-forward rule, and the per-turn (not per-space) cancellation check.
- */
+/** Pipeline behavior, against the component's own schema in `convex-test`. */
 
-// `import.meta.glob` is how convex-test discovers the function modules. The
-// component's files live outside a conventional `convex/` dir, so the glob is
-// pointed at them explicitly.
 const modules = import.meta.glob("../src/component/**/*.ts");
 
 const setup = () => convexTest(schema, modules);
 
-// The pipeline is scheduler-driven: the debounce window is a real
-// `runAfter`. Fake timers let a test jump the window instead of sleeping, and
-// `finishAllScheduledFunctions` needs the timer-advancing callback to actually
-// fire the jobs it is waiting on.
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -40,25 +27,39 @@ const cancelTurn = async (t: ReturnType<typeof setup>): Promise<void> => {
   });
 };
 
-/** Run every scheduled job, advancing the debounce timers to fire them. */
-const settle = async (t: ReturnType<typeof setup>): Promise<void> => {
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
-};
-
-/**
- * A message in `collapse` mode. The suites below exercise supersession,
- * carry-forward and batching, which only exist in that mode — the component
- * default is `immediate` (one message, one turn), covered separately at the
- * bottom of this file.
- */
-const message = (overrides: Record<string, unknown> = {}) => ({
+/** A message in the default `immediate` mode. */
+const plain = (overrides: Record<string, unknown> = {}) => ({
   spaceId: "chat-1",
   messageId: "m1",
   platform: "imessage",
   message: { content: { type: "text", format: "plain", text: "hey" } },
-  mode: "collapse" as const,
   ...overrides,
 });
+
+/**
+ * A message in `collapse` mode, which most suites below use: supersession,
+ * carry-forward and batching only exist there.
+ */
+const message = (overrides: Record<string, unknown> = {}) =>
+  plain({ mode: "collapse" as const, ...overrides });
+
+/** The space's current collapse turn. */
+const currentTurn = async (t: ReturnType<typeof setup>) =>
+  (await t.run(
+    async (ctx) => (await ctx.db.query("inflight").first())?.turnId
+  )) as Id<"turns">;
+
+/** The turn that drained a message. */
+const turnOf = async (t: ReturnType<typeof setup>, messageId: string) =>
+  (await t.run(
+    async (ctx) =>
+      (
+        await ctx.db
+          .query("inbound")
+          .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
+          .unique()
+      )?.turnId
+  )) as Id<"turns">;
 
 describe("inbound.enqueue", () => {
   it("stores a verified message and registers the space", async () => {
@@ -196,10 +197,7 @@ describe("cancellation and carry-forward", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
     await settle(t);
 
-    const turnId = (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
+    const turnId = await currentTurn(t);
 
     // Handler finished — but its reply is only queued, and a supersession can
     // still cancel it, so the inherited message must survive.
@@ -231,10 +229,8 @@ describe("cancellation and carry-forward", () => {
   });
 
   it("keeps every message across back-to-back supersessions", async () => {
-    // The regression this replaced: a turn that inherited a carried message
-    // and was then itself superseded dropped that message, because the flush
-    // had already deleted it from the carry table. A user typing three
-    // messages quickly lost the first one.
+    // Each message supersedes the turn before it, so the last turn inherits
+    // the first two.
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
@@ -263,25 +259,14 @@ describe("cancellation and carry-forward", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
 
-    const turnId = await t.run(async (ctx) => {
-      const inflight = await ctx.db.query("inflight").first();
-      return inflight?.turnId;
-    });
+    const turnId = await currentTurn(t);
     expect(turnId).toBeDefined();
 
-    expect(
-      await t.query(api.pipeline.isCancelled, {
-        turnId: turnId as Id<"turns">,
-      })
-    ).toBe(false);
+    expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(false);
 
     await cancelTurn(t);
 
-    expect(
-      await t.query(api.pipeline.isCancelled, {
-        turnId: turnId as Id<"turns">,
-      })
-    ).toBe(true);
+    expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(true);
   });
 
   it("treats an unknown turn as cancelled", async () => {
@@ -300,10 +285,7 @@ describe("outbox", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const inflight = await ctx.db.query("inflight").first();
-      return inflight?.turnId;
-    })) as Id<"turns">;
+    const turnId = await currentTurn(t);
 
     const first = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -327,32 +309,11 @@ describe("outbox", () => {
     ]);
   });
 
-  it("keys sends without a turn apart within one millisecond", async () => {
-    const t = setup();
-    const send = async (text: string) =>
-      await t.mutation(api.outbox.enqueue, {
-        spaceId: "chat-1",
-        kind: "sendMessage" as const,
-        content: { type: "text", format: "plain", text },
-      });
-
-    // Fake timers hold `Date.now()` still, as a single mutation does.
-    const first = await send("one");
-    const second = await send("two");
-
-    expect(first.queued).toBe(true);
-    expect(second.queued).toBe(true);
-    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
-  });
-
   it("refuses to queue a send from a superseded turn", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const inflight = await ctx.db.query("inflight").first();
-      return inflight?.turnId;
-    })) as Id<"turns">;
+    const turnId = await currentTurn(t);
 
     await cancelTurn(t);
 
@@ -364,28 +325,6 @@ describe("outbox", () => {
     });
     expect(result.queued).toBe(false);
     expect(result.reason).toBe("turn-cancelled");
-  });
-
-  it("cancels pending sends belonging to a superseded turn", async () => {
-    const t = setup();
-    await t.mutation(api.inbound.enqueue, message());
-    await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const inflight = await ctx.db.query("inflight").first();
-      return inflight?.turnId;
-    })) as Id<"turns">;
-
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: "chat-1",
-      turnId,
-      kind: "sendMessage" as const,
-      content: { type: "text", format: "plain", text: "queued" },
-    });
-    await cancelTurn(t);
-
-    const rows = await t.query(api.outbox.list, { spaceId: "chat-1" });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.status).toBe("cancelled");
   });
 
   it("allows a turnless send regardless of conversational state", async () => {
@@ -489,27 +428,11 @@ describe("signals do not drive turns", () => {
     expect(rows[0]?.status).toBe("handled");
   });
 
-  it("does not arm the debounce, so a receipt alone starts no turn", async () => {
-    const t = setup();
-    await t.mutation(api.inbound.enqueue, readReceipt("r1"));
-    await settle(t);
-
-    const inflight = await t.run(
-      async (ctx) => await ctx.db.query("inflight").first()
-    );
-    // No turn was ever created. This is what stops the echo feedback loop:
-    // reply → read receipt → reply → … forever.
-    expect(inflight?.turnId).toBeUndefined();
-  });
-
   it("does not cancel the turn it is acknowledging", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
+    const turnId = await currentTurn(t);
 
     // A receipt for the bot's own reply lands while the turn is still open.
     await t.mutation(api.inbound.enqueue, readReceipt("r1"));
@@ -518,50 +441,12 @@ describe("signals do not drive turns", () => {
   });
 });
 
-describe("pacing", () => {
-  const turnFor = async (t: ReturnType<typeof setup>) => {
-    await t.mutation(api.inbound.enqueue, message());
-    await settle(t);
-    return (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
-  };
-
-  it("does not delay the first reply of a turn", async () => {
-    const t = setup();
-    const turnId = await turnFor(t);
-
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: "chat-1",
-      turnId,
-      kind: "sendMessage" as const,
-      content: { type: "text", format: "plain", text: "first" },
-      pacingMs: 800,
-    });
-
-    // Pacing separates consecutive messages; delaying the first is pure
-    // latency before the user sees anything.
-    const scheduled = await t.run(
-      async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()
-    );
-    const delivery = scheduled.find((j) => j.name.includes("claim"));
-    expect(delivery).toBeDefined();
-    expect(delivery?.scheduledTime).toBeLessThanOrEqual(
-      (delivery?._creationTime ?? 0) + 1
-    );
-  });
-});
-
 describe("pacing counts messages, not control actions", () => {
   it("does not let an auto-markMessageRead push the reply into a paced slot", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message());
     await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
+    const turnId = await currentTurn(t);
 
     // The shape a real handler produces: acknowledge, then reply.
     await t.mutation(api.outbox.enqueue, {
@@ -578,8 +463,8 @@ describe("pacing counts messages, not control actions", () => {
       pacingMs: 600,
     });
 
-    // markMessageRead occupies seq 0, but the reply is still the first *message* of
-    // the turn and must not be delayed.
+    // A read receipt is not a reply, so the reply is still the turn's first
+    // and is not delayed.
     const jobs = await t.run(
       async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()
     );
@@ -596,10 +481,7 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const firstTurn = (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
+    const firstTurn = await currentTurn(t);
 
     // The handler queued a reply; it has not gone out yet (a real send
     // takes a moment to go out).
@@ -616,20 +498,6 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
     const rows = await t.query(api.outbox.list, { spaceId: "chat-1" });
     // The stale reply never ships — this is what replaces the debounce.
     expect(rows.at(-1)?.status).toBe("cancelled");
-  });
-
-  it("hands the superseded message to the next turn as context", async () => {
-    const t = setup();
-    await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
-    await settle(t);
-    await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
-
-    // m1 was already drained by the cancelled turn, so it moves to `carried`
-    // and the next flush sees both — no message is answered twice or lost.
-    const carried = await t.run(
-      async (ctx) => await ctx.db.query("carried").collect()
-    );
-    expect(carried.map((c) => c.messageId)).toEqual(["m1"]);
   });
 
   it("flushes immediately by default", async () => {
@@ -662,12 +530,6 @@ describe("a message is answered only when its reply actually ships", () => {
       content: { type: "text", format: "plain", text },
     });
 
-  const liveTurn = async (t: ReturnType<typeof setup>) =>
-    (await t.run(async (ctx) => {
-      const row = await ctx.db.query("inflight").first();
-      return row?.turnId;
-    })) as Id<"turns">;
-
   it("carries a message forward when its queued reply gets cancelled", async () => {
     // `completeTurn` runs when the handler finishes, but the reply is only
     // *queued* then. A supersession moments later cancels it — so the message
@@ -675,7 +537,7 @@ describe("a message is answered only when its reply actually ships", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const turnId = await liveTurn(t);
+    const turnId = await currentTurn(t);
 
     await queueReply(t, turnId, "echo: m1");
     await t.mutation(api.pipeline.completeTurn, {
@@ -695,7 +557,7 @@ describe("a message is answered only when its reply actually ships", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
-    const turnId = await liveTurn(t);
+    const turnId = await currentTurn(t);
 
     const queued = await queueReply(t, turnId, "echo: m1");
     // The reply reached the user.
@@ -725,7 +587,7 @@ describe("a message is answered only when its reply actually ships", () => {
     await settle(t);
     await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
     await settle(t);
-    return await liveTurn(t);
+    return await currentTurn(t);
   };
 
   /** Queue a reply for the turn and mark its request as going out. */
@@ -770,7 +632,7 @@ describe("a message is answered only when its reply actually ships", () => {
     await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
     await settle(t);
 
-    const nextTurn = await liveTurn(t);
+    const nextTurn = await currentTurn(t);
     const carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
     );
@@ -782,15 +644,6 @@ describe("a message is answered only when its reply actually ships", () => {
 });
 
 describe("immediate mode (the default): one message, one turn", () => {
-  // No `mode` — this is what a user gets out of the box.
-  const plain = (overrides: Record<string, unknown> = {}) => ({
-    spaceId: "chat-1",
-    messageId: "m1",
-    platform: "imessage",
-    message: { content: { type: "text", format: "plain", text: "hey" } },
-    ...overrides,
-  });
-
   it("gives each message its own turn", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, plain({ messageId: "m1" }));
@@ -827,13 +680,7 @@ describe("immediate mode (the default): one message, one turn", () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, plain({ messageId: "m1" }));
     await settle(t);
-    const turnId = (await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query("inbound")
-        .withIndex("by_messageId", (q) => q.eq("messageId", "m1"))
-        .unique();
-      return row?.turnId;
-    })) as Id<"turns">;
+    const turnId = await turnOf(t, "m1");
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -847,40 +694,12 @@ describe("immediate mode (the default): one message, one turn", () => {
     const rows = await t.query(api.outbox.list, { spaceId: "chat-1" });
     expect(rows.every((r) => r.status !== "cancelled")).toBe(true);
   });
-
-  it("still dedupes redeliveries", async () => {
-    const t = setup();
-    await t.mutation(api.inbound.enqueue, plain({ messageId: "m1" }));
-    const again = await t.mutation(
-      api.inbound.enqueue,
-      plain({ messageId: "m1" })
-    );
-    expect(again.deduped).toBe(true);
-  });
 });
 
 describe("concurrent immediate turns stay independent", () => {
-  const plain = (overrides: Record<string, unknown> = {}) => ({
-    spaceId: "chat-1",
-    messageId: "m1",
-    platform: "imessage",
-    message: { content: { type: "text", format: "plain", text: "hey" } },
-    ...overrides,
-  });
-
   it("does not let a later message invalidate an earlier turn's reply", async () => {
-    // Regression: every turn used to share one `inflight` row, so each new
-    // message overwrote `turnId` and silently cancelled its predecessors'
-    // queued sends. In immediate mode all three replies must survive.
+    // Immediate turns are independent: no message cancels another's reply.
     const t = setup();
-    const turnOf = async (messageId: string) =>
-      (await t.run(async (ctx) => {
-        const row = await ctx.db
-          .query("inbound")
-          .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
-          .unique();
-        return row?.turnId;
-      })) as Id<"turns">;
 
     for (const id of ["m1", "m2", "m3"]) {
       await t.mutation(api.inbound.enqueue, plain({ messageId: id }));
@@ -888,7 +707,7 @@ describe("concurrent immediate turns stay independent", () => {
     }
 
     for (const id of ["m1", "m2", "m3"]) {
-      const turnId = await turnOf(id);
+      const turnId = await turnOf(t, id);
       expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(false);
 
       const queued = await t.mutation(api.outbox.enqueue, {

@@ -15,6 +15,7 @@ import {
   receivedMessage,
   SECRET,
   SPACE_ID,
+  settle,
   sign,
 } from "./fixtures.js";
 import vector from "./standard-webhooks.json";
@@ -233,10 +234,6 @@ describe("the webhook route", () => {
       body,
       headers: sign(body, { id: String(payload.id) }),
     });
-  };
-
-  const settle = async (t: ReturnType<typeof setup>): Promise<void> => {
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
   };
 
   const stored = async (t: ReturnType<typeof setup>) =>

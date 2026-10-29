@@ -1,4 +1,5 @@
 import { Webhook } from "standardwebhooks";
+import { vi } from "vitest";
 
 /**
  * Event and response fixtures in the shape of the `2026-07-01` contract
@@ -205,3 +206,10 @@ export const json =
       status,
       headers: { "content-type": "application/json", ...headers },
     });
+
+/** Run every scheduled function, firing each with the fake timers. */
+export const settle = async (t: {
+  finishAllScheduledFunctions: (advanceTimers: () => void) => Promise<void>;
+}): Promise<void> => {
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+};
