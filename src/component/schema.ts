@@ -2,12 +2,9 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 /**
- * A Photon `Message`, stored exactly as the `message.received` event delivered
- * it (`data.object`). Kept as an opaque `v.any()` rather than a discriminated
- * union on purpose: the API adds fields and content types without a new API
- * version, and a strict validator here would reject a delivery that
- * `@photon-ai/api` itself is happy to read. Narrowing happens in app code,
- * where the `Message` type from `@photon-ai/api` applies.
+ * A Photon `Message`, as the event delivered it (`data.object`). `v.any()`
+ * because the API adds fields and content types within an API version; apps
+ * narrow it with the `Message` type from `@photon-ai/api`.
  */
 const message = v.any();
 
@@ -29,27 +26,50 @@ export const outboxStatus = v.union(
   v.literal("cancelled")
 );
 
+export const sendKind = v.union(
+  v.literal("sendMessage"),
+  v.literal("markMessageRead"),
+  v.literal("setSpaceTyping")
+);
+
+/**
+ * One outbound action, as `outbox.enqueue` takes it, the `outbox` table keeps
+ * it and `outbox.loadJob` hands it to `transport.execute`.
+ */
+export const sendFields = {
+  spaceId: v.string(),
+  kind: sendKind,
+  content: v.optional(v.any()),
+  parentMessageId: v.optional(v.string()),
+  email: v.optional(v.any()),
+  telegram: v.optional(v.any()),
+  // `markMessageRead` only: the message to mark read.
+  targetMessageId: v.optional(v.string()),
+};
+
+export const credentials = v.object({
+  projectId: v.string(),
+  apiKey: v.string(),
+  baseUrl: v.optional(v.string()),
+});
+
 export default defineSchema({
   /**
-   * Every verified inbound message, and the batch queue itself. Messages stay
-   * here until a flush drains them — the "drain in the handler, not the
-   * enqueuer" rule — so a cancelled flush loses nothing.
+   * Every verified inbound message, and the queue flushes drain. A message
+   * stays queued until a flush drains it, so a cancelled flush loses nothing.
    */
   inbound: defineTable({
     spaceId: v.string(),
     // Photon message id (`pho_msg_…`). Webhook deliveries are at-least-once,
     // so this is the dedupe key.
     messageId: v.string(),
-    platform: v.string(),
     message,
     // When the component stored it. Not `receivedAt`, which would read as the
     // message's own `timestamps.receivedAt`.
     queuedAt: v.number(),
     status: inboundStatus,
     // Set when a turn drains this row, so cancellation can find its messages.
-    turnId: v.optional(v.string()),
-    // The rest of the event, without `data.object` (stored above as `message`).
-    raw: v.optional(v.any()),
+    turnId: v.optional(v.id("turns")),
   })
     .index("by_messageId", ["messageId"])
     .index("by_spaceId_and_queuedAt", ["spaceId", "queuedAt"])
@@ -57,9 +77,8 @@ export default defineSchema({
     .index("by_turnId", ["turnId"]),
 
   /**
-   * Routing registry. Replies need the `senderId` — the agent's own user in
-   * this space, from the event's `receivedBy` — which is not derivable from
-   * the space id alone.
+   * Routing registry. Replies are sent as `senderId`, the agent's own user in
+   * the space, which only an event's `receivedBy` tells.
    */
   spaces: defineTable({
     spaceId: v.string(),
@@ -68,73 +87,42 @@ export default defineSchema({
     kind: v.optional(v.string()),
   }).index("by_spaceId", ["spaceId"]),
 
-  /**
-   * Per-space record of the turn that currently owns the pipeline in collapse
-   * mode, and its scheduled flush and handler jobs. A turn is one
-   * conversational exchange: flush → handler → sends.
-   *
-   * `ctx.scheduler.cancel` cannot stop an action that has already started, so
-   * cancellation is cooperative: a running handler polls `isCancelled`, which
-   * reads the turn's row in `turns`.
-   */
+  /** Each space's current collapse turn, and its flush and handler jobs. */
   inflight: defineTable({
     spaceId: v.string(),
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
     flushJobId: v.optional(v.id("_scheduled_functions")),
     handlerJobId: v.optional(v.id("_scheduled_functions")),
   }).index("by_spaceId", ["spaceId"]),
 
   /**
-   * One row per turn, and the authority on whether that turn is still live.
-   *
-   * `inflight` tracks only the *current* turn for a space, which is enough for
-   * collapse mode but wrong for immediate mode, where several turns are open at
-   * once and are independent. Deriving liveness from "is this the current
-   * turn?" would let each new message silently invalidate its predecessors.
+   * One row per turn, whose id is the turn id, and the authority on whether it
+   * is still live. Not `inflight`: in immediate mode several turns are open at
+   * once, and "is this the space's current turn?" would let each new message
+   * cancel its predecessors.
    */
   turns: defineTable({
-    turnId: v.string(),
-    spaceId: v.string(),
     status: v.union(v.literal("live"), v.literal("cancelled")),
-  }).index("by_turnId", ["turnId"]),
+  }),
 
   /**
-   * Messages a cancelled turn had already drained. The next flush prepends
-   * them so the model still sees them — as history, not as fresh input.
-   *
-   * A flush *claims* these rows (stamps `turnId`) rather than deleting them,
-   * and they are removed only once that turn completes. Deleting at read time
-   * loses them if the claiming turn is itself superseded — the same
-   * "drain in the handler, not the enqueuer" rule that governs `inbound`.
+   * Messages a cancelled turn had drained, which the next turn gets as
+   * `carried`. The flush that hands them on claims them (sets `turnId`); they
+   * are deleted once a reply to them goes out.
    */
   carried: defineTable({
     spaceId: v.string(),
     messageId: v.string(),
     message,
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
   })
     .index("by_spaceId", ["spaceId"])
     .index("by_turnId", ["turnId"]),
 
-  /**
-   * Outbound actions. A row's id is its idempotency key: `sendMessage` and
-   * `markMessageRead` send it as the request's `idempotency-key` header, and
-   * retries reuse it (see the note in `outbox.ts`).
-   */
+  /** Outbound actions, one row each. A row's id is its idempotency key. */
   outbox: defineTable({
-    spaceId: v.string(),
-    turnId: v.optional(v.string()),
-    kind: v.union(
-      v.literal("sendMessage"),
-      v.literal("markMessageRead"),
-      v.literal("setSpaceTyping")
-    ),
-    content: v.optional(v.any()),
-    parentMessageId: v.optional(v.string()),
-    email: v.optional(v.any()),
-    telegram: v.optional(v.any()),
-    // `markMessageRead` only: the message to mark read.
-    targetMessageId: v.optional(v.string()),
+    ...sendFields,
+    turnId: v.optional(v.id("turns")),
     status: outboxStatus,
     attempts: v.number(),
     queuedAt: v.number(),
@@ -155,9 +143,5 @@ export default defineSchema({
    * them here only when they changed. Anyone with access to this deployment's
    * dashboard can read the API key.
    */
-  config: defineTable({
-    projectId: v.string(),
-    apiKey: v.string(),
-    baseUrl: v.optional(v.string()),
-  }),
+  config: defineTable(credentials),
 });

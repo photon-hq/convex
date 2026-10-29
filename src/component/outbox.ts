@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { type Infer, v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
@@ -9,6 +9,7 @@ import {
   query,
 } from "./_generated/server.js";
 import { isReply } from "./pipeline.js";
+import { credentials, sendFields } from "./schema.js";
 
 /**
  * The outbound half: a durable outbox, one row per action.
@@ -27,35 +28,23 @@ const RETRY_BACKOFF_FACTOR = 4;
 // abandons after 30 s, so a healthy attempt has settled by the first look.
 const RECOVER_DELAY_MS = 60_000;
 
-export const sendKind = v.union(
-  v.literal("sendMessage"),
-  v.literal("markMessageRead"),
-  v.literal("setSpaceTyping")
-);
-
 const turnIsLive = async (
   ctx: MutationCtx,
-  turnId: string | undefined
+  turnId: Id<"turns"> | undefined
 ): Promise<boolean> => {
   if (!turnId) {
     // A send with no turn (e.g. a proactive outbound message) is never
     // subject to conversational cancellation.
     return true;
   }
-  const record = await ctx.db
-    .query("turns")
-    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-    .unique();
-  if (!record) {
-    return false;
-  }
-  return record.status === "live";
+  const record = await ctx.db.get("turns", turnId);
+  return record?.status === "live";
 };
 
 /** Keep the single `config` row in step with the credentials the app passed. */
 const saveConfig = async (
   ctx: MutationCtx,
-  config: { projectId: string; apiKey: string; baseUrl?: string }
+  config: Infer<typeof credentials>
 ): Promise<void> => {
   const existing = await ctx.db.query("config").unique();
   if (!existing) {
@@ -131,30 +120,19 @@ const sendNextReply = async (
 };
 
 /**
- * Queue one outbound action.
- *
- * Rejects (without writing) when the queueing turn has already been
- * superseded — the guard that stops a cancelled turn from talking over the
- * turn that replaced it. A turn's replies go out one at a time, in the order
- * they were queued, each at least `pacingMs` after the one before it.
+ * Queue one outbound action, unless its turn has been superseded. A turn's
+ * replies go out one at a time, in order, each at least `pacingMs` after the
+ * one before.
  */
 export const enqueue = mutation({
   args: {
-    spaceId: v.string(),
-    turnId: v.optional(v.string()),
-    kind: sendKind,
-    content: v.optional(v.any()),
-    parentMessageId: v.optional(v.string()),
-    email: v.optional(v.any()),
-    telegram: v.optional(v.any()),
-    targetMessageId: v.optional(v.string()),
+    ...sendFields,
+    turnId: v.optional(v.id("turns")),
     pacingMs: v.optional(v.number()),
     // Photon API credentials. Given `projectId` and `apiKey`, the three
     // together replace the stored ones when different, so an omitted `baseUrl`
     // clears the stored one; without them, the stored ones are used.
-    projectId: v.optional(v.string()),
-    apiKey: v.optional(v.string()),
-    baseUrl: v.optional(v.string()),
+    ...credentials.partial().fields,
   },
   returns: v.object({
     queued: v.boolean(),
@@ -166,7 +144,7 @@ export const enqueue = mutation({
       await saveConfig(ctx, {
         projectId: args.projectId,
         apiKey: args.apiKey,
-        ...(args.baseUrl === undefined ? {} : { baseUrl: args.baseUrl }),
+        baseUrl: args.baseUrl,
       });
     }
 
@@ -174,12 +152,13 @@ export const enqueue = mutation({
       return { queued: false, reason: "turn-cancelled" };
     }
 
-    const priorForTurn = args.turnId
-      ? await ctx.db
-          .query("outbox")
-          .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
-          .collect()
-      : [];
+    const priorForTurn =
+      args.turnId && isReply(args)
+        ? await ctx.db
+            .query("outbox")
+            .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
+            .collect()
+        : [];
 
     // The read endpoint marks one message read, so fall back to the newest
     // inbound message of this turn when the caller did not name one.
@@ -195,15 +174,13 @@ export const enqueue = mutation({
 
     const rowId = await ctx.db.insert("outbox", {
       spaceId: args.spaceId,
-      ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
+      turnId: args.turnId,
       kind: args.kind,
-      ...(args.content === undefined ? {} : { content: args.content }),
-      ...(args.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: args.parentMessageId }),
-      ...(args.email === undefined ? {} : { email: args.email }),
-      ...(args.telegram === undefined ? {} : { telegram: args.telegram }),
-      ...(targetMessageId === undefined ? {} : { targetMessageId }),
+      content: args.content,
+      parentMessageId: args.parentMessageId,
+      email: args.email,
+      telegram: args.telegram,
+      targetMessageId,
       status: "pending" as const,
       attempts: 0,
       queuedAt: Date.now(),
@@ -254,23 +231,10 @@ export const loadJob = internalQuery({
   returns: v.union(
     v.null(),
     v.object({
-      spaceId: v.string(),
+      ...sendFields,
       idempotencyKey: v.string(),
-      kind: sendKind,
-      content: v.optional(v.any()),
-      parentMessageId: v.optional(v.string()),
-      email: v.optional(v.any()),
-      telegram: v.optional(v.any()),
-      targetMessageId: v.optional(v.string()),
       senderId: v.optional(v.string()),
-      config: v.union(
-        v.null(),
-        v.object({
-          projectId: v.string(),
-          apiKey: v.string(),
-          baseUrl: v.optional(v.string()),
-        })
-      ),
+      config: v.union(v.null(), credentials),
     })
   ),
   handler: async (ctx, args) => {
@@ -287,23 +251,17 @@ export const loadJob = internalQuery({
       spaceId: row.spaceId,
       idempotencyKey: row._id,
       kind: row.kind,
-      ...(row.content === undefined ? {} : { content: row.content }),
-      ...(row.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: row.parentMessageId }),
-      ...(row.email === undefined ? {} : { email: row.email }),
-      ...(row.telegram === undefined ? {} : { telegram: row.telegram }),
-      ...(row.targetMessageId === undefined
-        ? {}
-        : { targetMessageId: row.targetMessageId }),
-      ...(space?.senderId === undefined ? {} : { senderId: space.senderId }),
+      content: row.content,
+      parentMessageId: row.parentMessageId,
+      email: row.email,
+      telegram: row.telegram,
+      targetMessageId: row.targetMessageId,
+      senderId: space?.senderId,
       config: config
         ? {
             projectId: config.projectId,
             apiKey: config.apiKey,
-            ...(config.baseUrl === undefined
-              ? {}
-              : { baseUrl: config.baseUrl }),
+            baseUrl: config.baseUrl,
           }
         : null,
     };
@@ -329,9 +287,6 @@ const retryOrFail = async (
     return;
   }
 
-  // Same idempotency key on the retry, so a `sendMessage` or
-  // `markMessageRead` that actually landed before the error is answered with
-  // its original result instead of being carried out twice.
   const delay = BASE_RETRY_DELAY_MS * RETRY_BACKOFF_FACTOR ** row.attempts;
   const jobId = await ctx.scheduler.runAfter(delay, internal.outbox.claim, {
     rowId: row._id,
@@ -365,10 +320,8 @@ export const settle = internalMutation({
         ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
       });
 
-      // The API accepted a reply, so this turn's inherited messages are
-      // finally spent. Doing it here rather than when the handler finishes is
-      // what makes the pipeline lossless: until a reply goes out, every
-      // message stays recoverable by the next turn.
+      // A reply went out, so the turn's inherited messages are spent. Until
+      // then, the next turn could still need them.
       if (isReply(row) && row.turnId) {
         const inherited = await ctx.db
           .query("carried")
@@ -440,9 +393,9 @@ const toOutboxRow = (row: Doc<"outbox">) => ({
   status: row.status,
   attempts: row.attempts,
   queuedAt: row.queuedAt,
-  ...(row.sentAt === undefined ? {} : { sentAt: row.sentAt }),
-  ...(row.messageId === undefined ? {} : { messageId: row.messageId }),
-  ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
+  sentAt: row.sentAt,
+  messageId: row.messageId,
+  lastError: row.lastError,
 });
 
 /**

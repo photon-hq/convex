@@ -35,12 +35,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           mode?: "immediate" | "collapse";
           onTurn?: string;
           platform: string;
-          raw?: any;
           senderId?: string;
           spaceId: string;
           triggersTurn?: boolean;
         },
-        { cancelledTurn?: string; deduped: boolean },
+        { deduped: boolean },
         Name
       >;
       getSpace: FunctionReference<
@@ -118,7 +117,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       isCancelled: FunctionReference<
         "query",
         "internal",
-        { spaceId: string; turnId: string },
+        { turnId: string },
         boolean,
         Name
       >;

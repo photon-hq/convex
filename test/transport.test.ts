@@ -1,8 +1,10 @@
+import type { FunctionArgs } from "convex/server";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PhotonComponent } from "../src/client/index.js";
 import { api, internal } from "../src/component/_generated/api.js";
 import type { ComponentApi } from "../src/component/_generated/component.js";
+import type { Id } from "../src/component/_generated/dataModel.js";
 import schema from "../src/component/schema.js";
 import {
   AGENT_ID,
@@ -14,6 +16,7 @@ import {
   PROJECT_ID,
   receivedMessage,
   SPACE_ID,
+  settle,
 } from "./fixtures.js";
 
 /**
@@ -46,10 +49,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const settle = async (t: ReturnType<typeof setup>): Promise<void> => {
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
-};
-
 /** Stub the Photon API with scripted responses. */
 const stubApi = (...responses: (() => Response)[]) => {
   const stub = fakeFetch(...responses);
@@ -57,12 +56,12 @@ const stubApi = (...responses: (() => Response)[]) => {
   return stub;
 };
 
-/** Store one received message and start its turn; returns the turn id. */
-const startTurn = async (
+/** Deliver one received message to the component. */
+const receive = (
   t: ReturnType<typeof setup>,
   overrides: Record<string, unknown> = {}
-): Promise<string> => {
-  await t.mutation(api.inbound.enqueue, {
+) =>
+  t.mutation(api.inbound.enqueue, {
     spaceId: SPACE_ID,
     messageId: MESSAGE_ID,
     platform: "imessage",
@@ -71,6 +70,13 @@ const startTurn = async (
     kind: "direct",
     ...overrides,
   });
+
+/** Deliver one received message and start its turn; returns the turn id. */
+const startTurn = async (
+  t: ReturnType<typeof setup>,
+  overrides: Record<string, unknown> = {}
+): Promise<Id<"turns">> => {
+  await receive(t, overrides);
   await settle(t);
   return (await t.run(async (ctx) => {
     const row = await ctx.db
@@ -80,11 +86,46 @@ const startTurn = async (
       )
       .unique();
     return row?.turnId;
-  })) as string;
+  })) as Id<"turns">;
 };
+
+/** A received message in `collapse` mode. */
+const collapse = (messageId = MESSAGE_ID) => ({
+  messageId,
+  message: receivedMessage({ id: messageId }),
+  mode: "collapse" as const,
+});
+
+/**
+ * Queue an outbound action, a `sendMessage` unless `send` says otherwise,
+ * with the test credentials.
+ */
+const queue = (
+  t: ReturnType<typeof setup>,
+  send: Partial<FunctionArgs<typeof api.outbox.enqueue>>
+) =>
+  t.mutation(api.outbox.enqueue, {
+    spaceId: SPACE_ID,
+    kind: "sendMessage" as const,
+    ...credentials,
+    ...send,
+  });
 
 const outbox = async (t: ReturnType<typeof setup>) =>
   await t.query(api.outbox.list, { spaceId: SPACE_ID });
+
+/** A client whose ctx runs the component's own functions in `t`. */
+const client = (
+  t: ReturnType<typeof setup>,
+  options: ConstructorParameters<typeof PhotonComponent>[1]
+) => {
+  const photon = new PhotonComponent(api as unknown as ComponentApi, options);
+  const ctx = {
+    runMutation: (reference: unknown, args: unknown) =>
+      t.mutation(reference as typeof api.outbox.enqueue, args as never),
+  } as unknown as Parameters<PhotonComponent["sendMessage"]>[0];
+  return { photon, ctx };
+};
 
 describe("requests", () => {
   it.each([
@@ -119,14 +160,7 @@ describe("requests", () => {
     const photonApi = stubApi(json(202, dispatched()));
     const turnId = await startTurn(t);
 
-    const queued = await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content: text,
-      ...extra,
-      ...credentials,
-    });
+    const queued = await queue(t, { turnId, content: text, ...extra });
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(1);
@@ -151,12 +185,7 @@ describe("requests", () => {
     const photonApi = stubApi(json(202, dispatched()));
     const turnId = await startTurn(t);
 
-    const queued = await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "markMessageRead" as const,
-      ...credentials,
-    });
+    const queued = await queue(t, { turnId, kind: "markMessageRead" });
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(1);
@@ -180,13 +209,9 @@ describe("requests", () => {
       )
     );
     const turnId = await startTurn(t);
+    const { photon, ctx } = client(t, credentials);
 
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "setSpaceTyping" as const,
-      ...credentials,
-    });
+    await photon.setSpaceTyping(ctx, { spaceId: SPACE_ID, turnId });
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(1);
@@ -211,11 +236,7 @@ describe("requests", () => {
     await startTurn(t);
 
     // No turn, so there is no newest message to fall back to.
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      kind: "markMessageRead" as const,
-      ...credentials,
-    });
+    await queue(t, { kind: "markMessageRead" });
     await settle(t);
 
     expect(photonApi.requests).toHaveLength(0);
@@ -230,14 +251,7 @@ describe("responses", () => {
   const sendOnce = async (...responses: (() => Response)[]) => {
     const t = setup();
     const photonApi = stubApi(...responses);
-    const turnId = await startTurn(t);
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content: text,
-      ...credentials,
-    });
+    await queue(t, { turnId: await startTurn(t), content: text });
     await settle(t);
     return { photonApi, rows: await outbox(t) };
   };
@@ -285,12 +299,7 @@ describe("responses", () => {
       )
     );
     const turnId = await startTurn(t, { platform: "telegram" });
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "setSpaceTyping" as const,
-      ...credentials,
-    });
+    await queue(t, { turnId, kind: "setSpaceTyping" });
     await settle(t);
 
     expect((await outbox(t))[0]).toMatchObject({
@@ -321,12 +330,10 @@ describe("responses", () => {
     const photonApi = stubApi(json(status, { code, status, detail: "nope" }));
     const turnId = await startTurn(t);
 
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
+    await queue(t, {
       turnId,
       kind,
       ...(kind === "sendMessage" ? { content: text } : {}),
-      ...credentials,
     });
     await settle(t);
 
@@ -366,17 +373,6 @@ describe("responses", () => {
 });
 
 describe("recovery", () => {
-  const queueSend = async (t: ReturnType<typeof setup>): Promise<void> => {
-    const turnId = await startTurn(t);
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content: text,
-      ...credentials,
-    });
-  };
-
   /** Run the scheduled functions that are due now, not the later ones. */
   const runDue = async (t: ReturnType<typeof setup>): Promise<void> => {
     vi.advanceTimersByTime(0);
@@ -386,7 +382,7 @@ describe("recovery", () => {
   it("retries an attempt whose action failed before settling it", async () => {
     const t = setup();
     const photonApi = stubApi(json(202, dispatched()));
-    await queueSend(t);
+    await queue(t, { turnId: await startTurn(t), content: text });
     // A second config row makes `loadJob` throw, so `transport.execute` fails
     // before it reaches `settle`.
     const extra = await t.run(
@@ -419,7 +415,7 @@ describe("recovery", () => {
   it("leaves an attempt alone while its action has not finished", async () => {
     const t = setup();
     const photonApi = stubApi(json(202, dispatched()));
-    await queueSend(t);
+    await queue(t, { turnId: await startTurn(t), content: text });
     await runDue(t); // claim
 
     // `recover` looks while `transport.execute` is still pending.
@@ -444,19 +440,6 @@ describe("recovery", () => {
 });
 
 describe("credentials", () => {
-  /** A client whose ctx runs the component's own functions in `t`. */
-  const client = (
-    t: ReturnType<typeof setup>,
-    options: ConstructorParameters<typeof PhotonComponent>[1]
-  ) => {
-    const photon = new PhotonComponent(api as unknown as ComponentApi, options);
-    const ctx = {
-      runMutation: (reference: unknown, args: unknown) =>
-        t.mutation(reference as typeof api.outbox.enqueue, args as never),
-    } as unknown as Parameters<PhotonComponent["sendMessage"]>[0];
-    return { photon, ctx };
-  };
-
   const config = async (t: ReturnType<typeof setup>) =>
     await t.run(async (ctx) => await ctx.db.query("config").collect());
 
@@ -513,6 +496,9 @@ describe("credentials", () => {
     await expect(
       photon.markMessageRead(ctx, { spaceId: SPACE_ID, turnId: "turn-1" })
     ).rejects.toThrow(MISSING_CREDENTIALS);
+    await expect(
+      photon.setSpaceTyping(ctx, { spaceId: SPACE_ID })
+    ).rejects.toThrow(MISSING_CREDENTIALS);
     expect(await outbox(t)).toHaveLength(0);
   });
 
@@ -540,43 +526,19 @@ describe("credentials", () => {
 describe("reactions", () => {
   const reaction = { type: "reaction", action: "add", reaction: "👍" };
 
-  const enqueue = (
-    t: ReturnType<typeof setup>,
-    turnId: string,
-    content: Record<string, unknown>,
-    pacingMs = 0
-  ) =>
-    t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content,
-      ...(content === reaction ? { parentMessageId: MESSAGE_ID } : {}),
-      pacingMs,
-      ...credentials,
-    });
-
-  const collapse = (messageId: string) => ({
-    messageId,
-    message: receivedMessage({ id: messageId }),
-    mode: "collapse" as const,
-  });
+  const react = { content: reaction, parentMessageId: MESSAGE_ID };
 
   it("does not answer the turn, so a superseded turn carries its messages", async () => {
     const t = setup();
     stubApi(json(202, dispatched({ content: reaction })));
     const turnId = await startTurn(t, collapse("m1"));
 
-    await enqueue(t, turnId, reaction);
+    await queue(t, { turnId, ...react });
     await settle(t);
     expect((await outbox(t))[0]?.status).toBe("sent");
     await t.mutation(api.pipeline.completeTurn, { spaceId: SPACE_ID, turnId });
 
-    await t.mutation(api.inbound.enqueue, {
-      spaceId: SPACE_ID,
-      platform: "imessage",
-      ...collapse("m2"),
-    });
+    await receive(t, collapse("m2"));
 
     const carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
@@ -593,11 +555,11 @@ describe("reactions", () => {
       await t.run(async (ctx) => await ctx.db.query("carried").collect());
     expect(await carried()).toHaveLength(1);
 
-    await enqueue(t, turnId, reaction);
+    await queue(t, { turnId, ...react });
     await settle(t);
     expect(await carried()).toHaveLength(1);
 
-    await enqueue(t, turnId, text);
+    await queue(t, { turnId, content: text });
     await settle(t);
     expect(await carried()).toHaveLength(0);
   });
@@ -620,10 +582,10 @@ describe("reactions", () => {
     const t = setup();
     stubApi(json(202, dispatched()));
     const turnId = await startTurn(t);
-    await enqueue(t, turnId, text);
+    await queue(t, { turnId, content: text });
 
-    await enqueue(t, turnId, reaction, 800);
-    await enqueue(t, turnId, text, 800);
+    await queue(t, { turnId, ...react, pacingMs: 800 });
+    await queue(t, { turnId, content: text, pacingMs: 800 });
 
     // The first text and the reaction go at once; the second text waits for
     // the first to settle.
@@ -635,37 +597,23 @@ describe("reactions", () => {
     stubApi(json(202, dispatched()));
     const turnId = await startTurn(t);
 
-    await enqueue(t, turnId, reaction, 800);
-    await enqueue(t, turnId, text, 800);
+    await queue(t, { turnId, ...react, pacingMs: 800 });
+    await queue(t, { turnId, content: text, pacingMs: 800 });
 
     expect(await claimDelays(t)).toEqual([0, 0]);
   });
 });
 
 describe("a reply already going out when a follow-up supersedes its turn", () => {
-  const collapse = { mode: "collapse" as const };
-  const FOLLOW_UP_ID = "pho_msg_00000000000000000000000002";
-
   const followUp = (t: ReturnType<typeof setup>) =>
-    t.mutation(api.inbound.enqueue, {
-      spaceId: SPACE_ID,
-      messageId: FOLLOW_UP_ID,
-      platform: "imessage",
-      message: receivedMessage({ id: FOLLOW_UP_ID }),
-      senderId: AGENT_ID,
-      kind: "direct",
-      ...collapse,
-    });
+    receive(t, collapse("pho_msg_00000000000000000000000002"));
 
   /** Queue a reply and start sending it, without letting the request finish. */
-  const startReply = async (t: ReturnType<typeof setup>, turnId: string) => {
-    await t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content: text,
-      ...credentials,
-    });
+  const startReply = async (
+    t: ReturnType<typeof setup>,
+    turnId: Id<"turns">
+  ) => {
+    await queue(t, { turnId, content: text });
     const rowId = await t.run(
       async (ctx) => (await ctx.db.query("outbox").first())?._id
     );
@@ -677,7 +625,7 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
   it("answers the turn, so its messages are not carried into the next one", async () => {
     const t = setup();
     const photonApi = stubApi(json(202, dispatched()));
-    const turnId = await startTurn(t, collapse);
+    const turnId = await startTurn(t, collapse());
     await startReply(t, turnId);
     await t.mutation(api.pipeline.completeTurn, { spaceId: SPACE_ID, turnId });
 
@@ -697,7 +645,7 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
       json(503, { code: "SERVICE_UNAVAILABLE", status: 503 }),
       json(202, dispatched())
     );
-    const turnId = await startTurn(t, collapse);
+    const turnId = await startTurn(t, collapse());
     await startReply(t, turnId);
 
     await followUp(t);
@@ -709,20 +657,11 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
 });
 
 describe("a turn's replies", () => {
-  const send = (
-    t: ReturnType<typeof setup>,
-    turnId: string,
-    part: string,
-    pacingMs?: number
-  ) =>
-    t.mutation(api.outbox.enqueue, {
-      spaceId: SPACE_ID,
-      turnId,
-      kind: "sendMessage" as const,
-      content: { type: "text", format: "plain", text: part },
-      ...(pacingMs === undefined ? {} : { pacingMs }),
-      ...credentials,
-    });
+  const part = (body: string) => ({
+    type: "text",
+    format: "plain",
+    text: body,
+  });
 
   it("go out one at a time, in the order they were queued", async () => {
     const t = setup();
@@ -731,8 +670,8 @@ describe("a turn's replies", () => {
       json(202, dispatched())
     );
     const turnId = await startTurn(t);
-    await send(t, turnId, "one");
-    await send(t, turnId, "two");
+    await queue(t, { turnId, content: part("one") });
+    await queue(t, { turnId, content: part("two") });
     await settle(t);
 
     // "one" is retried before "two" goes out.
@@ -748,8 +687,8 @@ describe("a turn's replies", () => {
     const t = setup();
     stubApi(json(202, dispatched()));
     const turnId = await startTurn(t);
-    for (const part of ["one", "two", "three"]) {
-      await send(t, turnId, part, 800);
+    for (const body of ["one", "two", "three"]) {
+      await queue(t, { turnId, content: part(body), pacingMs: 800 });
     }
     await settle(t);
 

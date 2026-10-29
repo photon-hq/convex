@@ -6,15 +6,7 @@ import {
   scheduleFlush,
 } from "./pipeline.js";
 
-/**
- * The inbound half of the pipeline: durable dedupe, the batch queue, and the
- * space registry.
- *
- * The HTTP entry point verifies a delivery and calls `enqueue` before it
- * answers 200, so a message is durable the moment Photon is told the delivery
- * succeeded. Nothing can be left for after the response: on a serverless
- * runtime the isolate is frozen the instant the response is returned.
- */
+/** Inbound: dedupe, the queue that flushes drain, and the space registry. */
 
 const messageArgs = {
   spaceId: v.string(),
@@ -22,9 +14,7 @@ const messageArgs = {
   platform: v.string(),
   // The Photon `Message` (`data.object` of the event).
   message: v.any(),
-  raw: v.optional(v.any()),
   triggersTurn: v.optional(v.boolean()),
-  // The agent's own user in this space (`receivedBy.id`); replies send as it.
   senderId: v.optional(v.string()),
   kind: v.optional(v.string()),
 };
@@ -64,31 +54,19 @@ const upsertSpace = async (
 };
 
 /**
- * Record one verified inbound message and (re)arm the debounce window.
- *
- * Returns `{ deduped: true }` when the message id has been seen before —
- * webhook deliveries are at-least-once, so a redelivery must not create a
- * second queue row or restart the debounce timer.
+ * Store one verified inbound message and schedule its turn. A redelivery
+ * (deliveries are at-least-once) changes nothing and returns `deduped: true`.
  */
 export const enqueue = mutation({
   args: {
     ...messageArgs,
     debounceMs: v.optional(v.number()),
-    /**
-     * `"immediate"` (default): every message is its own turn — no supersession,
-     * no carry-forward, no batching. `"collapse"`: a new message supersedes the
-     * in-flight turn and its messages are carried into the next one.
-     */
     mode: v.optional(v.union(v.literal("immediate"), v.literal("collapse"))),
-    // Function handle (`createFunctionHandle(internal.foo.bar)`) for the app's
-    // turn handler. Threaded through per-call rather than stored at install
-    // time so the app can change or version its handler without a migration.
+    // The app's turn handler, as a function handle. Passed with every delivery
+    // rather than stored, so the app can change it without a migration.
     onTurn: v.optional(v.string()),
   },
-  returns: v.object({
-    deduped: v.boolean(),
-    cancelledTurn: v.optional(v.string()),
-  }),
+  returns: v.object({ deduped: v.boolean() }),
   handler: async (ctx, args) => {
     const duplicate = await ctx.db
       .query("inbound")
@@ -102,60 +80,50 @@ export const enqueue = mutation({
     await upsertSpace(ctx, {
       spaceId: args.spaceId,
       platform: args.platform,
-      ...(args.senderId === undefined ? {} : { senderId: args.senderId }),
-      ...(args.kind === undefined ? {} : { kind: args.kind }),
+      senderId: args.senderId,
+      kind: args.kind,
     });
 
-    // Signals (read receipts, typing) are recorded for visibility but never
-    // become turn input — stored already-handled so no flush can drain them.
+    // Signals (read receipts, typing) are stored already handled, so no flush
+    // drains them.
     const triggersTurn = args.triggersTurn ?? true;
 
     const rowId = await ctx.db.insert("inbound", {
       spaceId: args.spaceId,
       messageId: args.messageId,
-      platform: args.platform,
       message: args.message,
       queuedAt: now,
       status: triggersTurn ? ("queued" as const) : ("handled" as const),
-      ...(args.raw === undefined ? {} : { raw: args.raw }),
     });
 
     if (!triggersTurn) {
-      // Critically, do NOT cancel the in-flight turn or re-arm the debounce.
-      // A read receipt arriving mid-generation must not cancel the reply it is
-      // acknowledging, and must not extend the window that reply is waiting on.
+      // A read receipt must not cancel, or delay, the reply it acknowledges.
       return { deduped: false };
     }
 
     if ((args.mode ?? "immediate") === "immediate") {
-      // Every message is its own turn. Nothing is superseded, so a reply
-      // already in flight is left alone and no message waits on another.
+      // Every message is its own turn, and supersedes nothing.
       await scheduleFlush(ctx, {
         spaceId: args.spaceId,
         debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
-        ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
+        onTurn: args.onTurn,
         only: rowId,
       });
       return { deduped: false };
     }
 
-    // Collapse mode: a new message supersedes whatever turn is in flight —
-    // cancel it, carry its messages forward, then restart the window.
-    const cancelledTurn = await cancelCurrentTurn(ctx, args.spaceId);
-    await scheduleFlush(ctx, {
+    // Collapse mode: the new message supersedes the turn in flight.
+    const flushJobId = await scheduleFlush(ctx, {
       spaceId: args.spaceId,
       debounceMs: args.debounceMs ?? DEFAULT_DEBOUNCE_MS,
-      ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
+      onTurn: args.onTurn,
     });
-
-    return {
-      deduped: false,
-      ...(cancelledTurn === undefined ? {} : { cancelledTurn }),
-    };
+    await cancelCurrentTurn(ctx, args.spaceId, flushJobId);
+    return { deduped: false };
   },
 });
 
-/** Look up a space's routing record (`senderId`, `kind`) for the send path. */
+/** A space's routing record and the time of its newest message, or `null`. */
 export const getSpace = query({
   args: { spaceId: v.string() },
   returns: v.union(
@@ -188,8 +156,8 @@ export const getSpace = query({
     return {
       spaceId: space.spaceId,
       platform: space.platform,
-      ...(space.senderId === undefined ? {} : { senderId: space.senderId }),
-      ...(space.kind === undefined ? {} : { kind: space.kind }),
+      senderId: space.senderId,
+      kind: space.kind,
       lastInboundAt: newest?.queuedAt ?? space._creationTime,
     };
   },

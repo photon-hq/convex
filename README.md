@@ -180,7 +180,7 @@ to the deployment's dashboard can read the API key**.
 |---|---|
 | `photon.sendMessage(ctx, { spaceId, content, turnId?, parentMessageId?, email?, telegram?, pacingMs? })` | `sendMessage` — `content` is the API's send content, e.g. `{ type: "text", format: "plain", text }` or `format: "markdown"`. `parentMessageId` makes it a reply; `email` and `telegram` are the platform options. |
 | `photon.markMessageRead(ctx, { spaceId, turnId })` | `markMessageRead` on the turn's newest message |
-| `ctx.runMutation(components.photon.outbox.enqueue, { spaceId, turnId, kind: "setSpaceTyping" })` | `setSpaceTyping` (typing on). Uses the credentials the last send stored; to set them, pass `projectId`, `apiKey` and, if you use one, `baseUrl` together. |
+| `photon.setSpaceTyping(ctx, { spaceId, turnId? })` | `setSpaceTyping` (typing on) |
 
 Replies are sent as the agent's own user in the space — the `receivedBy` of the
 incoming messages. A space that has never received a message with `receivedBy`
@@ -201,7 +201,24 @@ returns `{ queued: false, reason: "turn-cancelled" }`.
 Uploading attachments is not part of this release. Received attachment
 messages are stored and handed to your handler like any other message.
 
+## Reading messages and spaces
+
+| Method | Returns |
+|---|---|
+| `photon.listMessages(ctx, { spaceId, limit? })` | The space's most recent received messages (50 by default), oldest first, as `{ messageId, message, queuedAt, status }`. `message` is the Photon `Message`. `status` is `queued` until a turn takes the message, then `drained` until that turn completes (`completeTurn`) or is superseded, then `handled`; read receipts and typing indicators are stored `handled`. |
+| `photon.getSpace(ctx, { spaceId })` | The space's `platform`, `kind` (for example `direct` or `group`), `senderId` (the agent's own user in it) and `lastInboundAt` (when its newest message was stored), or `null` for a space that has never received a message. `kind` and `senderId` stay absent until a received message carries them, and a space without a `senderId` can't be sent to (see [Sending](#sending)). |
+
 ## The webhook endpoint
+
+`photon.registerRoutes(http)` serves `POST /photon/webhook`. To serve it at
+another path, set `webhookPath`, and use that path in the destination's URL:
+
+```ts
+new PhotonComponent(components.photon, {
+  onTurn: internal.agent.respond,
+  webhookPath: "/hooks/photon", // POST https://<deployment>.convex.site/hooks/photon
+});
+```
 
 | Request | Response |
 |---|---|

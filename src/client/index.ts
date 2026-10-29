@@ -7,6 +7,7 @@ import type {
 import {
   createFunctionHandle,
   type FunctionReference,
+  type FunctionReturnType,
   type GenericActionCtx,
   type GenericDataModel,
   type GenericMutationCtx,
@@ -18,26 +19,22 @@ import type { ComponentApi } from "../component/_generated/component.js";
 import { parseWebhook } from "../shared/wire.js";
 
 /**
- * App-facing client for the Photon component.
- *
- * Wraps the component's functions for app code, and runs in the app's own
- * environment — which is what gives it access to the app's `PHOTON_*`
- * environment variables (a component cannot read the app's env vars).
+ * App-facing client for the Photon component. It runs in the app, so it can
+ * read the app's `PHOTON_*` environment variables, which the component cannot.
  */
 
-export const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
+const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
 const OK_STATUS = 200;
 const SERVER_ERROR_STATUS = 500;
 
 /** The turn a handler is invoked with — one conversational exchange. */
 export interface Turn {
   /**
-   * Messages a previous, cancelled turn had already drained. Present them as
-   * earlier context rather than fresh input — the user has been waiting on
-   * these longer than the ones in `messages`.
+   * Messages a cancelled turn had drained, older than `messages`: present them
+   * as earlier context.
    */
   carried: Message[];
-  /** Messages from this burst, oldest first. */
+  /** Messages from this turn, oldest first. */
   messages: Message[];
   spaceId: string;
   turnId: string;
@@ -51,24 +48,6 @@ export interface StoredMessage {
   queuedAt: number;
   status: string;
 }
-
-/**
- * Narrow a turn reference down to exactly the fields the component's
- * validators accept.
- *
- * Handlers are naturally called as `photon.isCancelled(ctx, args)` where
- * `args` is the whole turn — including `messages` and `carried`. Convex
- * rejects extra fields, so passing that through verbatim throws
- * `ArgumentValidationError`. Narrowing here keeps the ergonomic call working
- * instead of pushing the destructuring onto every caller.
- */
-export const pickTurn = (ref: {
-  spaceId: string;
-  turnId: string;
-}): { spaceId: string; turnId: string } => ({
-  spaceId: ref.spaceId,
-  turnId: ref.turnId,
-});
 
 // Convenient types for `ctx` args, that only include the bare minimum.
 type QueryCtx = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
@@ -84,16 +63,12 @@ type ActionCtx = Pick<
 /**
  * How inbound messages become turns.
  *
- * - `"immediate"` (default) — every message is handled on its own. No batching,
- *   no waiting, no supersession. Simple and predictable: N messages produce N
- *   handler calls. `turn.messages` always has exactly one entry and
- *   `turn.carried` is always empty.
- *
- * - `"collapse"` — a burst becomes one turn. A new message supersedes the
- *   in-flight turn, cancels any reply that has not shipped, and carries its
- *   messages into the next one as prior context. Use when replies are expensive
- *   (an LLM call) or when answering each message separately would read as the
- *   agent talking over itself.
+ * - `"immediate"` (default): every message is its own turn, so `messages` has
+ *   one entry and `carried` is empty.
+ * - `"collapse"`: a burst becomes one turn. A new message supersedes the turn
+ *   in flight, cancels its unsent replies and carries its messages into the
+ *   next turn. For replies that are expensive, such as an LLM call, or that
+ *   would talk over each other.
  */
 export type TurnMode = "immediate" | "collapse";
 
@@ -106,11 +81,9 @@ export interface PhotonComponentOptions {
    */
   baseUrl?: string;
   /**
-   * Settling window before a turn is handled. Only meaningful in `"collapse"`
-   * mode, where it widens the window in which a follow-up can join the same
-   * turn. It is a latency cost on every reply, so leave it at 0 unless you
-   * specifically need tighter grouping — cancellation already collapses most
-   * bursts on its own.
+   * Wait before each turn, in either mode. In `"collapse"` mode a follow-up
+   * that lands within it joins the turn, though cancellation already merges
+   * most bursts without it. It delays every reply.
    *
    * @default 0
    */
@@ -127,9 +100,8 @@ export interface PhotonComponentOptions {
    */
   onTurn?: FunctionReference<"action" | "mutation", "internal" | "public">;
   /**
-   * Gap between a turn's replies. They go out one at a time, in the order they
-   * were queued, each after the first at least `pacingMs` after the one before
-   * it. Read receipts and reactions are never held back or delayed.
+   * Gap between a turn's replies, which go out one at a time in the order they
+   * were queued. Read receipts and reactions are never delayed.
    */
   pacingMs?: number;
   /** Photon project id (`pho_prj_…`). Falls back to `process.env.PHOTON_PROJECT_ID`. */
@@ -144,11 +116,7 @@ export interface PhotonComponentOptions {
 }
 
 /** The outbox's answer to a queued action. */
-interface Queued {
-  idempotencyKey?: string;
-  queued: boolean;
-  reason?: string;
-}
+type Queued = FunctionReturnType<ComponentApi["outbox"]["enqueue"]>;
 
 export class PhotonComponent {
   readonly component: ComponentApi;
@@ -175,10 +143,7 @@ export class PhotonComponent {
       : undefined;
   }
 
-  /**
-   * The credentials every send carries to the component, which keeps the
-   * latest in its `config` table for the send jobs.
-   */
+  /** The credentials every send passes to the component. */
   private credentials(): {
     projectId: string;
     apiKey: string;
@@ -192,7 +157,7 @@ export class PhotonComponent {
     return {
       projectId: this.projectId,
       apiKey: this.apiKey,
-      ...(this.baseUrl === undefined ? {} : { baseUrl: this.baseUrl }),
+      baseUrl: this.baseUrl,
     };
   }
 
@@ -204,11 +169,9 @@ export class PhotonComponent {
    * after the response — on Convex the isolate is frozen once the response is
    * returned.
    */
-  registerRoutes(http: HttpRouter, opts: { path?: string } = {}): void {
-    const path = opts.path ?? this.options.webhookPath ?? DEFAULT_WEBHOOK_PATH;
-
+  registerRoutes(http: HttpRouter): void {
     http.route({
-      path,
+      path: this.options.webhookPath ?? DEFAULT_WEBHOOK_PATH,
       method: "POST",
       handler: httpActionGeneric(async (ctx, request) => {
         const secret = this.secret();
@@ -236,17 +199,12 @@ export class PhotonComponent {
           messageId: message.messageId,
           platform: message.platform,
           message: message.message,
-          ...(message.senderId === undefined
-            ? {}
-            : { senderId: message.senderId }),
-          ...(message.kind === undefined ? {} : { kind: message.kind }),
+          senderId: message.senderId,
+          kind: message.kind,
           triggersTurn: message.triggersTurn,
           mode: this.options.mode ?? "immediate",
-          raw: message.raw,
-          ...(this.options.debounceMs === undefined
-            ? {}
-            : { debounceMs: this.options.debounceMs }),
-          ...(onTurn === undefined ? {} : { onTurn }),
+          debounceMs: this.options.debounceMs,
+          onTurn,
         });
 
         return new Response("ok", { status: OK_STATUS });
@@ -263,12 +221,11 @@ export class PhotonComponent {
    */
   async isCancelled(
     ctx: QueryCtx | MutationCtx | ActionCtx,
-    args: { spaceId: string; turnId: string }
+    args: { turnId: string }
   ): Promise<boolean> {
-    return await ctx.runQuery(
-      this.component.pipeline.isCancelled,
-      pickTurn(args)
-    );
+    return await ctx.runQuery(this.component.pipeline.isCancelled, {
+      turnId: args.turnId,
+    });
   }
 
   /**
@@ -293,12 +250,10 @@ export class PhotonComponent {
       spaceId: args.spaceId,
       kind: "sendMessage" as const,
       content: args.content,
-      ...(args.turnId === undefined ? {} : { turnId: args.turnId }),
-      ...(args.parentMessageId === undefined
-        ? {}
-        : { parentMessageId: args.parentMessageId }),
-      ...(args.email === undefined ? {} : { email: args.email }),
-      ...(args.telegram === undefined ? {} : { telegram: args.telegram }),
+      turnId: args.turnId,
+      parentMessageId: args.parentMessageId,
+      email: args.email,
+      telegram: args.telegram,
       pacingMs: args.pacingMs ?? this.options.pacingMs ?? 0,
       ...this.credentials(),
     });
@@ -317,25 +272,35 @@ export class PhotonComponent {
     });
   }
 
+  /** Show the agent typing in a space. Rejected if the turn was superseded. */
+  async setSpaceTyping(
+    ctx: MutationCtx | ActionCtx,
+    args: { spaceId: string; turnId?: string }
+  ): Promise<Queued> {
+    return await ctx.runMutation(this.component.outbox.enqueue, {
+      spaceId: args.spaceId,
+      kind: "setSpaceTyping" as const,
+      turnId: args.turnId,
+      ...this.credentials(),
+    });
+  }
+
   /** Mark a turn's messages handled. Call when the handler finishes. */
   async completeTurn(
     ctx: MutationCtx | ActionCtx,
     args: { spaceId: string; turnId: string }
   ): Promise<void> {
-    await ctx.runMutation(this.component.pipeline.completeTurn, pickTurn(args));
+    await ctx.runMutation(this.component.pipeline.completeTurn, {
+      spaceId: args.spaceId,
+      turnId: args.turnId,
+    });
   }
 
   /** Routing record for a space (`senderId`, `kind`), or `null`. */
   async getSpace(
     ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string }
-  ): Promise<{
-    spaceId: string;
-    platform: string;
-    senderId?: string;
-    kind?: string;
-    lastInboundAt: number;
-  } | null> {
+  ): Promise<FunctionReturnType<ComponentApi["inbound"]["getSpace"]>> {
     return await ctx.runQuery(this.component.inbound.getSpace, args);
   }
 
@@ -354,21 +319,9 @@ export class PhotonComponent {
   async listOutbox(
     ctx: QueryCtx | MutationCtx | ActionCtx,
     args: { spaceId: string; limit?: number }
-  ): Promise<
-    {
-      idempotencyKey: string;
-      kind: string;
-      status: string;
-      attempts: number;
-      queuedAt: number;
-      sentAt?: number;
-      messageId?: string;
-      lastError?: string;
-    }[]
-  > {
+  ): Promise<FunctionReturnType<ComponentApi["outbox"]["list"]>> {
     return await ctx.runQuery(this.component.outbox.list, args);
   }
 }
 
 export type { ComponentApi } from "../component/_generated/component.js";
-export { parseWebhook } from "../shared/wire.js";

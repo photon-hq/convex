@@ -11,41 +11,12 @@ import {
 } from "./_generated/server.js";
 
 /**
- * The batching pipeline.
- *
- * People text in bursts, so a reply per message can produce overlapping
- * answers that never see the actual question. A flush drains everything
- * outstanding for a space and hands it to the app as one turn.
- *
- * By default the flush is immediate and bursts are collapsed by *cancellation*
- * rather than by waiting: a follow-up supersedes the in-flight turn, carries
- * its messages into the next one, and cancels any reply that has not yet gone
- * out. An optional `debounceMs` adds a settling window on top, trading latency
- * for tighter batching.
- *
- * Two rules from Photon's production architecture are load-bearing here:
- *
- * 1. **Drain in the handler, not the enqueuer.** Rows stay in `inbound` until
- *    a flush actually runs. A cancelled flush therefore loses nothing — the
- *    next one picks the same rows up.
- * 2. **Cancellation is per-turn, not per-space.** Liveness is decided by
- *    turn identity, so a stale flag from a superseded turn can't orphan the
- *    turn that replaced it — and, unlike a timestamp comparison, it stays
- *    correct when both events land in the same millisecond.
+ * The turn pipeline. In `immediate` mode every message is its own turn. In
+ * `collapse` mode a flush drains everything queued for a space into one turn,
+ * and a new message supersedes the turn in flight: it cancels the turn's
+ * unsent replies and carries its messages into the next one.
  */
 
-/**
- * No debounce by default.
- *
- * A fixed wait taxes every turn to solve a problem that only happens in
- * bursts. Cancellation already covers the burst case and costs nothing when
- * there is no burst: a follow-up message supersedes the in-flight turn,
- * carries its messages forward, and marks its queued sends cancelled — and
- * because a reply takes a moment to go out, a genuine burst almost always
- * lands inside that window and collapses anyway.
- *
- * Set `debounceMs` explicitly to trade latency for tighter batching.
- */
 export const DEFAULT_DEBOUNCE_MS = 0;
 
 /** Turn payload handed to the app's handler. */
@@ -80,13 +51,9 @@ const getInflight = async (
     .unique();
 
 /**
- * Move a dead turn's messages into `carried` so the next batch still sees
- * them — the carry-forward rule.
- *
- * `includeHandled` also rescues rows the handler already marked `handled`.
- * `completeTurn` runs when the handler *finishes*, but its reply is only
- * queued at that point — a supersession moments later cancels that reply. The
- * message would then be marked answered while its answer never shipped.
+ * Move a dead turn's messages into `carried`, so the next turn still sees
+ * them. `includeHandled` also takes those `completeTurn` marked handled: when
+ * the turn was not answered, the reply it queued is being cancelled.
  */
 const carryForwardDrained = async (
   ctx: MutationCtx,
@@ -110,17 +77,13 @@ const carryForwardDrained = async (
 };
 
 /**
- * Settle a dead turn's inherited messages.
- *
- * These were carried in from an *earlier* cancelled turn, so they are not in
- * `inbound` under this turn and `carryForwardDrained` cannot see them. A turn
- * that spent them drops them; otherwise un-claiming makes the next flush pick
- * them up again — without this, a message is lost the moment two
- * supersessions happen back to back.
+ * Settle the messages a dead turn inherited, which `carryForwardDrained` does
+ * not see: drop them if the turn spent them, else release them to the next
+ * flush.
  */
 const releaseCarried = async (
   ctx: MutationCtx,
-  turnId: string,
+  turnId: Id<"turns">,
   spent: boolean
 ): Promise<void> => {
   const claimed = await ctx.db
@@ -153,22 +116,20 @@ const cancelQueuedSends = async (
 };
 
 /**
- * Cancel whatever turn currently owns this space.
- *
- * Cancels the scheduled flush/handler jobs, flags the turn, and moves any
- * rows the turn had already drained into `carried` so the next batch still
- * sees them. `ctx.scheduler.cancel` cannot stop an action that is already
- * running — that case is handled cooperatively by `isCancelled`, which a
- * running handler polls between steps.
- *
- * Returns the cancelled turn id, if there was one.
+ * Cancel the turn that owns this space, if any, and record `flushJobId`, the
+ * flush that starts the next turn, in its place. A handler that is already
+ * running finds out through `isCancelled`.
  */
 export const cancelCurrentTurn = async (
   ctx: MutationCtx,
-  spaceId: string
-): Promise<string | undefined> => {
+  spaceId: string,
+  flushJobId?: Id<"_scheduled_functions">
+): Promise<void> => {
   const inflight = await getInflight(ctx, spaceId);
   if (!inflight) {
+    if (flushJobId) {
+      await ctx.db.insert("inflight", { spaceId, flushJobId });
+    }
     return;
   }
 
@@ -198,34 +159,28 @@ export const cancelCurrentTurn = async (
       .collect();
 
     await carryForwardDrained(ctx, drained, !answered);
-    // Inherited messages go the way of the turn's own: spent when the turn
-    // was answered and its handler called `completeTurn`, which leaves no
-    // message `drained`, and handed on otherwise. Handed on, they would reach
-    // the next turn while the reply that answers them still goes out.
+    // Inherited messages go the way of the turn's own: spent once the turn was
+    // answered and completed (no message left `drained`), so they are not
+    // answered twice, and handed on otherwise.
     const completed = drained.every((row) => row.status !== "drained");
     await releaseCarried(ctx, turnId, answered && completed);
     await cancelQueuedSends(ctx, queued);
-
-    const record = await ctx.db
-      .query("turns")
-      .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-      .unique();
-    if (record) {
-      await ctx.db.patch("turns", record._id, { status: "cancelled" as const });
-    }
+    await ctx.db.patch("turns", turnId, { status: "cancelled" as const });
   }
 
   // Forget the dead turn: a second message that lands before the next flush
   // would otherwise cancel it again and carry its messages twice.
   await ctx.db.patch("inflight", inflight._id, {
     turnId: undefined,
-    flushJobId: undefined,
+    flushJobId,
     handlerJobId: undefined,
   });
-  return turnId;
 };
 
-/** Arm (or re-arm) the debounce timer for a space. */
+/**
+ * Schedule a flush after the debounce window. `cancelCurrentTurn` records a
+ * collapse flush, so the next message can cancel it.
+ */
 export const scheduleFlush = async (
   ctx: MutationCtx,
   args: {
@@ -234,46 +189,20 @@ export const scheduleFlush = async (
     onTurn?: string;
     only?: Id<"inbound">;
   }
-): Promise<void> => {
-  const jobId = await ctx.scheduler.runAfter(
-    args.debounceMs,
-    internal.pipeline.flush,
-    {
-      spaceId: args.spaceId,
-      ...(args.onTurn === undefined ? {} : { onTurn: args.onTurn }),
-      ...(args.only === undefined ? {} : { only: args.only }),
-    }
-  );
+): Promise<Id<"_scheduled_functions">> =>
+  await ctx.scheduler.runAfter(args.debounceMs, internal.pipeline.flush, {
+    spaceId: args.spaceId,
+    onTurn: args.onTurn,
+    only: args.only,
+  });
 
-  // In immediate mode each message owns its own flush, so the job id is not
-  // tracked for cancellation — there is nothing to supersede.
-  if (args.only) {
-    return;
-  }
-
-  const inflight = await getInflight(ctx, args.spaceId);
-  if (inflight) {
-    await ctx.db.patch("inflight", inflight._id, { flushJobId: jobId });
-    return;
-  }
-  await ctx.db.insert("inflight", { spaceId: args.spaceId, flushJobId: jobId });
-};
-
-/**
- * Debounce expired: drain the burst and start a turn.
- *
- * Carried messages come first so the app can present them as earlier context
- * rather than fresh input.
- */
+/** Drain a space's queued messages into a new turn and hand it to the app. */
 export const flush = internalMutation({
   args: {
     spaceId: v.string(),
     onTurn: v.optional(v.string()),
-    /**
-     * Drain exactly this row and nothing else — `immediate` mode, where every
-     * message is its own turn. Omitted in `collapse` mode, which drains
-     * everything outstanding for the space.
-     */
+    // Immediate mode: drain this row alone. Collapse mode drains every queued
+    // row of the space.
     only: v.optional(v.id("inbound")),
   },
   returns: v.null(),
@@ -292,8 +221,7 @@ export const flush = internalMutation({
             q.eq("spaceId", args.spaceId).eq("status", "queued")
           )
           .collect();
-    // Inherited context only exists in collapse mode; immediate turns are
-    // strictly one message.
+    // Only collapse turns inherit messages.
     const carriedRows = args.only
       ? []
       : await ctx.db
@@ -305,10 +233,7 @@ export const flush = internalMutation({
       return null;
     }
 
-    const now = Date.now();
-    // Unique per turn, and derived from data already in the transaction —
-    // component functions are deterministic, so no Math.random() here.
-    const turnId = `${args.spaceId}:${now}:${queued[0]?._id ?? "carried"}`;
+    const turnId = await ctx.db.insert("turns", { status: "live" as const });
 
     for (const row of queued) {
       await ctx.db.patch("inbound", row._id, {
@@ -324,14 +249,6 @@ export const flush = internalMutation({
       await ctx.db.patch("carried", row._id, { turnId });
     }
 
-    await ctx.db.insert("turns", {
-      turnId,
-      spaceId: args.spaceId,
-      status: "live" as const,
-    });
-
-    // With no handler wired up, the messages are still durable and marked
-    // drained, so a later turn carries them forward rather than losing them.
     const handlerJobId = args.onTurn
       ? await ctx.scheduler.runAfter(0, args.onTurn as TurnHandler, {
           spaceId: args.spaceId,
@@ -341,10 +258,7 @@ export const flush = internalMutation({
         })
       : undefined;
 
-    // `inflight` models the single current turn, which only makes sense when
-    // turns supersede each other. Immediate turns are independent, so they are
-    // deliberately not registered there; only collapse turns are cancellable,
-    // so only they track the handler job.
+    // Only collapse turns supersede each other, so only they own `inflight`.
     if (!args.only) {
       const inflight = await getInflight(ctx, args.spaceId);
       if (inflight) {
@@ -357,7 +271,7 @@ export const flush = internalMutation({
         await ctx.db.insert("inflight", {
           spaceId: args.spaceId,
           turnId,
-          ...(handlerJobId === undefined ? {} : { handlerJobId }),
+          handlerJobId,
         });
       }
     }
@@ -365,27 +279,12 @@ export const flush = internalMutation({
   },
 });
 
-/**
- * Has this turn been superseded?
- *
- * Read from the turn's own record, not from "is this the space's current
- * turn?". In immediate mode several turns are open at once and are
- * independent, so identity-against-current would let each new message
- * invalidate its predecessors. Explicit per-turn state is also immune to two
- * events landing in the same millisecond.
- *
- * A long-running handler should poll this between steps (before generating,
- * before sending) and bail out when it returns true — `ctx.scheduler.cancel`
- * cannot stop an action that is already running.
- */
+/** Has this turn been superseded? */
 export const isCancelled = query({
-  args: { spaceId: v.string(), turnId: v.string() },
+  args: { turnId: v.id("turns") },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const record = await ctx.db
-      .query("turns")
-      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
-      .unique();
+    const record = await ctx.db.get("turns", args.turnId);
     // An unknown turn is treated as dead — a stale handler must not speak.
     if (!record) {
       return true;
@@ -396,7 +295,7 @@ export const isCancelled = query({
 
 /** Mark a turn's drained messages handled. Called when a turn completes. */
 export const completeTurn = mutation({
-  args: { spaceId: v.string(), turnId: v.string() },
+  args: { spaceId: v.string(), turnId: v.id("turns") },
   returns: v.null(),
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -408,10 +307,8 @@ export const completeTurn = mutation({
         await ctx.db.patch("inbound", row._id, { status: "handled" as const });
       }
     }
-    // Inherited messages are deliberately NOT dropped here. The handler has
-    // only *queued* its reply at this point; a supersession moments later
-    // cancels it. They are discarded in `outbox.settle` once a reply actually
-    // ships — the same rule that governs `inbound` rows.
+    // Inherited messages stay until a reply actually ships (`outbox.settle`):
+    // so far the reply is only queued, and a supersession can still cancel it.
 
     const inflight = await getInflight(ctx, args.spaceId);
     if (inflight?.turnId === args.turnId) {
