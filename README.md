@@ -201,7 +201,24 @@ returns `{ queued: false, reason: "turn-cancelled" }`.
 Uploading attachments is not part of this release. Received attachment
 messages are stored and handed to your handler like any other message.
 
+## Reading messages and spaces
+
+| Method | Returns |
+|---|---|
+| `photon.listMessages(ctx, { spaceId, limit? })` | The space's most recent received messages (50 by default), oldest first, as `{ messageId, message, queuedAt, status }`. `message` is the Photon `Message`. `status` is `queued` until a turn takes the message, `drained` while that turn is open, then `handled`; read receipts and typing indicators are stored `handled`. |
+| `photon.getSpace(ctx, { spaceId })` | The space's `platform`, its `kind` (for example `direct` or `group`), the agent's own user in it (`senderId`) and when its newest message was stored (`lastInboundAt`), or `null` for a space that has never received a message. |
+
 ## The webhook endpoint
+
+`photon.registerRoutes(http)` serves `POST /photon/webhook`. To serve it at
+another path, set `webhookPath`, and use that path in the destination's URL:
+
+```ts
+new PhotonComponent(components.photon, {
+  onTurn: internal.agent.respond,
+  webhookPath: "/hooks/photon", // POST https://<deployment>.convex.site/hooks/photon
+});
+```
 
 | Request | Response |
 |---|---|
