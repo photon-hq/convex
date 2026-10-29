@@ -7,7 +7,6 @@ import {
   internalMutation,
   type MutationCtx,
   mutation,
-  type QueryCtx,
   query,
 } from "./_generated/server.js";
 
@@ -80,15 +79,6 @@ const getInflight = async (
     .withIndex("by_spaceId", (q) => q.eq("spaceId", spaceId))
     .unique();
 
-export const getTurn = async (
-  ctx: QueryCtx,
-  turnId: string
-): Promise<Doc<"turns"> | null> =>
-  await ctx.db
-    .query("turns")
-    .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
-    .unique();
-
 /**
  * Move a dead turn's messages into `carried` so the next batch still sees
  * them — the carry-forward rule.
@@ -130,7 +120,7 @@ const carryForwardDrained = async (
  */
 const releaseCarried = async (
   ctx: MutationCtx,
-  turnId: string,
+  turnId: Id<"turns">,
   spent: boolean
 ): Promise<void> => {
   const claimed = await ctx.db
@@ -218,11 +208,7 @@ export const cancelCurrentTurn = async (
     const completed = drained.every((row) => row.status !== "drained");
     await releaseCarried(ctx, turnId, answered && completed);
     await cancelQueuedSends(ctx, queued);
-
-    const record = await getTurn(ctx, turnId);
-    if (record) {
-      await ctx.db.patch("turns", record._id, { status: "cancelled" as const });
-    }
+    await ctx.db.patch("turns", turnId, { status: "cancelled" as const });
   }
 
   // Forget the dead turn: a second message that lands before the next flush
@@ -301,10 +287,7 @@ export const flush = internalMutation({
       return null;
     }
 
-    const now = Date.now();
-    // Unique per turn, and derived from data already in the transaction —
-    // component functions are deterministic, so no Math.random() here.
-    const turnId = `${args.spaceId}:${now}:${queued[0]?._id ?? "carried"}`;
+    const turnId = await ctx.db.insert("turns", { status: "live" as const });
 
     for (const row of queued) {
       await ctx.db.patch("inbound", row._id, {
@@ -319,12 +302,6 @@ export const flush = internalMutation({
     for (const row of carriedRows) {
       await ctx.db.patch("carried", row._id, { turnId });
     }
-
-    await ctx.db.insert("turns", {
-      turnId,
-      spaceId: args.spaceId,
-      status: "live" as const,
-    });
 
     // With no handler wired up, the messages are still durable and marked
     // drained, so a later turn carries them forward rather than losing them.
@@ -375,10 +352,10 @@ export const flush = internalMutation({
  * cannot stop an action that is already running.
  */
 export const isCancelled = query({
-  args: { spaceId: v.string(), turnId: v.string() },
+  args: { spaceId: v.string(), turnId: v.id("turns") },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const record = await getTurn(ctx, args.turnId);
+    const record = await ctx.db.get("turns", args.turnId);
     // An unknown turn is treated as dead — a stale handler must not speak.
     if (!record) {
       return true;
@@ -389,7 +366,7 @@ export const isCancelled = query({
 
 /** Mark a turn's drained messages handled. Called when a turn completes. */
 export const completeTurn = mutation({
-  args: { spaceId: v.string(), turnId: v.string() },
+  args: { spaceId: v.string(), turnId: v.id("turns") },
   returns: v.null(),
   handler: async (ctx, args) => {
     const rows = await ctx.db

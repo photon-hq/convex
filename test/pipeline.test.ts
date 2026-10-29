@@ -199,7 +199,7 @@ describe("cancellation and carry-forward", () => {
     const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     // Handler finished — but its reply is only queued, and a supersession can
     // still cancel it, so the inherited message must survive.
@@ -272,7 +272,7 @@ describe("cancellation and carry-forward", () => {
     expect(
       await t.query(api.pipeline.isCancelled, {
         spaceId: "chat-1",
-        turnId: turnId as string,
+        turnId: turnId as Id<"turns">,
       })
     ).toBe(false);
 
@@ -281,19 +281,20 @@ describe("cancellation and carry-forward", () => {
     expect(
       await t.query(api.pipeline.isCancelled, {
         spaceId: "chat-1",
-        turnId: turnId as string,
+        turnId: turnId as Id<"turns">,
       })
     ).toBe(true);
   });
 
   it("treats an unknown turn as cancelled", async () => {
     const t = setup();
-    await t.mutation(api.inbound.enqueue, message());
+    const turnId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("turns", { status: "live" as const });
+      await ctx.db.delete("turns", id);
+      return id;
+    });
     expect(
-      await t.query(api.pipeline.isCancelled, {
-        spaceId: "chat-1",
-        turnId: "some-turn-that-never-existed",
-      })
+      await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
     ).toBe(true);
   });
 });
@@ -306,7 +307,7 @@ describe("outbox", () => {
     const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
       return inflight?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     const first = await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -355,7 +356,7 @@ describe("outbox", () => {
     const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
       return inflight?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     await cancelTurn(t);
 
@@ -376,7 +377,7 @@ describe("outbox", () => {
     const turnId = (await t.run(async (ctx) => {
       const inflight = await ctx.db.query("inflight").first();
       return inflight?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -512,7 +513,7 @@ describe("signals do not drive turns", () => {
     const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     // A receipt for the bot's own reply lands while the turn is still open.
     await t.mutation(api.inbound.enqueue, readReceipt("r1"));
@@ -530,7 +531,7 @@ describe("pacing", () => {
     return (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
   };
 
   it("does not delay the first reply of a turn", async () => {
@@ -566,7 +567,7 @@ describe("pacing counts messages, not control actions", () => {
     const turnId = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     // The shape a real handler produces: acknowledge, then reply.
     await t.mutation(api.outbox.enqueue, {
@@ -604,7 +605,7 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
     const firstTurn = (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     // The handler queued a reply; it has not gone out yet (a real send
     // takes a moment to go out).
@@ -657,7 +658,7 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
 describe("a message is answered only when its reply actually ships", () => {
   const queueReply = async (
     t: ReturnType<typeof setup>,
-    turnId: string,
+    turnId: Id<"turns">,
     text: string
   ) =>
     await t.mutation(api.outbox.enqueue, {
@@ -671,7 +672,7 @@ describe("a message is answered only when its reply actually ships", () => {
     (await t.run(async (ctx) => {
       const row = await ctx.db.query("inflight").first();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
   it("carries a message forward when its queued reply gets cancelled", async () => {
     // `completeTurn` runs when the handler finishes, but the reply is only
@@ -734,7 +735,10 @@ describe("a message is answered only when its reply actually ships", () => {
   };
 
   /** Queue a reply for the turn and mark its request as going out. */
-  const replyInFlight = async (t: ReturnType<typeof setup>, turnId: string) => {
+  const replyInFlight = async (
+    t: ReturnType<typeof setup>,
+    turnId: Id<"turns">
+  ) => {
     const queued = await queueReply(t, turnId, "echo: m1 and m2");
     await t.run(async (ctx) => {
       await ctx.db.patch("outbox", queued.idempotencyKey as Id<"outbox">, {
@@ -835,7 +839,7 @@ describe("immediate mode (the default): one message, one turn", () => {
         .withIndex("by_messageId", (q) => q.eq("messageId", "m1"))
         .unique();
       return row?.turnId;
-    })) as string;
+    })) as Id<"turns">;
 
     await t.mutation(api.outbox.enqueue, {
       spaceId: "chat-1",
@@ -882,7 +886,7 @@ describe("concurrent immediate turns stay independent", () => {
           .withIndex("by_messageId", (q) => q.eq("messageId", messageId))
           .unique();
         return row?.turnId;
-      })) as string;
+      })) as Id<"turns">;
 
     for (const id of ["m1", "m2", "m3"]) {
       await t.mutation(api.inbound.enqueue, plain({ messageId: id }));

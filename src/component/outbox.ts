@@ -8,7 +8,7 @@ import {
   mutation,
   query,
 } from "./_generated/server.js";
-import { getTurn, isReply } from "./pipeline.js";
+import { isReply } from "./pipeline.js";
 import { credentials, sendFields } from "./schema.js";
 
 /**
@@ -30,14 +30,14 @@ const RECOVER_DELAY_MS = 60_000;
 
 const turnIsLive = async (
   ctx: MutationCtx,
-  turnId: string | undefined
+  turnId: Id<"turns"> | undefined
 ): Promise<boolean> => {
   if (!turnId) {
     // A send with no turn (e.g. a proactive outbound message) is never
     // subject to conversational cancellation.
     return true;
   }
-  const record = await getTurn(ctx, turnId);
+  const record = await ctx.db.get("turns", turnId);
   return record?.status === "live";
 };
 
@@ -130,7 +130,7 @@ const sendNextReply = async (
 export const enqueue = mutation({
   args: {
     ...sendFields,
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
     pacingMs: v.optional(v.number()),
     // Photon API credentials. Given `projectId` and `apiKey`, the three
     // together replace the stored ones when different, so an omitted `baseUrl`

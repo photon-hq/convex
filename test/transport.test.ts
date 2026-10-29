@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PhotonComponent } from "../src/client/index.js";
 import { api, internal } from "../src/component/_generated/api.js";
 import type { ComponentApi } from "../src/component/_generated/component.js";
+import type { Id } from "../src/component/_generated/dataModel.js";
 import schema from "../src/component/schema.js";
 import {
   AGENT_ID,
@@ -61,7 +62,7 @@ const stubApi = (...responses: (() => Response)[]) => {
 const startTurn = async (
   t: ReturnType<typeof setup>,
   overrides: Record<string, unknown> = {}
-): Promise<string> => {
+): Promise<Id<"turns">> => {
   await t.mutation(api.inbound.enqueue, {
     spaceId: SPACE_ID,
     messageId: MESSAGE_ID,
@@ -80,7 +81,7 @@ const startTurn = async (
       )
       .unique();
     return row?.turnId;
-  })) as string;
+  })) as Id<"turns">;
 };
 
 const outbox = async (t: ReturnType<typeof setup>) =>
@@ -542,7 +543,7 @@ describe("reactions", () => {
 
   const enqueue = (
     t: ReturnType<typeof setup>,
-    turnId: string,
+    turnId: Id<"turns">,
     content: Record<string, unknown>,
     pacingMs = 0
   ) =>
@@ -658,7 +659,10 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
     });
 
   /** Queue a reply and start sending it, without letting the request finish. */
-  const startReply = async (t: ReturnType<typeof setup>, turnId: string) => {
+  const startReply = async (
+    t: ReturnType<typeof setup>,
+    turnId: Id<"turns">
+  ) => {
     await t.mutation(api.outbox.enqueue, {
       spaceId: SPACE_ID,
       turnId,
@@ -711,7 +715,7 @@ describe("a reply already going out when a follow-up supersedes its turn", () =>
 describe("a turn's replies", () => {
   const send = (
     t: ReturnType<typeof setup>,
-    turnId: string,
+    turnId: Id<"turns">,
     part: string,
     pacingMs?: number
   ) =>

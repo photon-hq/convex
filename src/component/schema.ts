@@ -73,7 +73,7 @@ export default defineSchema({
     queuedAt: v.number(),
     status: inboundStatus,
     // Set when a turn drains this row, so cancellation can find its messages.
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
   })
     .index("by_messageId", ["messageId"])
     .index("by_spaceId_and_queuedAt", ["spaceId", "queuedAt"])
@@ -103,13 +103,14 @@ export default defineSchema({
    */
   inflight: defineTable({
     spaceId: v.string(),
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
     flushJobId: v.optional(v.id("_scheduled_functions")),
     handlerJobId: v.optional(v.id("_scheduled_functions")),
   }).index("by_spaceId", ["spaceId"]),
 
   /**
-   * One row per turn, and the authority on whether that turn is still live.
+   * One row per turn, whose id is the turn id, and the authority on whether
+   * that turn is still live.
    *
    * `inflight` tracks only the *current* turn for a space, which is enough for
    * collapse mode but wrong for immediate mode, where several turns are open at
@@ -117,10 +118,8 @@ export default defineSchema({
    * turn?" would let each new message silently invalidate its predecessors.
    */
   turns: defineTable({
-    turnId: v.string(),
-    spaceId: v.string(),
     status: v.union(v.literal("live"), v.literal("cancelled")),
-  }).index("by_turnId", ["turnId"]),
+  }),
 
   /**
    * Messages a cancelled turn had already drained. The next flush prepends
@@ -135,7 +134,7 @@ export default defineSchema({
     spaceId: v.string(),
     messageId: v.string(),
     message,
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
   })
     .index("by_spaceId", ["spaceId"])
     .index("by_turnId", ["turnId"]),
@@ -147,7 +146,7 @@ export default defineSchema({
    */
   outbox: defineTable({
     ...sendFields,
-    turnId: v.optional(v.string()),
+    turnId: v.optional(v.id("turns")),
     status: outboxStatus,
     attempts: v.number(),
     queuedAt: v.number(),
