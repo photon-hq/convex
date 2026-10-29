@@ -26,7 +26,7 @@ import { parseWebhook } from "../shared/wire.js";
  * environment variables (a component cannot read the app's env vars).
  */
 
-export const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
+const DEFAULT_WEBHOOK_PATH = "/photon/webhook";
 const OK_STATUS = 200;
 const SERVER_ERROR_STATUS = 500;
 
@@ -328,4 +328,3 @@ export class PhotonComponent {
 }
 
 export type { ComponentApi } from "../component/_generated/component.js";
-export { parseWebhook } from "../shared/wire.js";
