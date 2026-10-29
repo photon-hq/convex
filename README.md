@@ -168,12 +168,16 @@ mode.
   across its retries, and `sendMessage` and `markMessageRead` send it as the
   request's `idempotency-key` header. A retry after a lost response gets the
   original result back instead of sending the message a second time.
-- **A message stays recoverable until a reply to it goes out.** It is not spent
-  when it is drained, and not when the handler returns: a handler that has
-  finished has only *queued* its reply, and a follow-up moments later can still
-  cancel it and carry the message into the next turn. A reply that is already
-  going out can't be recalled, so it is finished, with retries, and counts as
-  the answer; if it then fails for good, its row in `listOutbox` shows it.
+- **A message stays recoverable until its answer has gone out.** It is not
+  spent when it is drained, and not when the handler returns: a handler that
+  has finished has only *queued* its replies, and a follow-up moments later can
+  still cancel them and carry the message into the next turn. A reply that is
+  already going out can't be recalled, so it is finished, with retries; once
+  none of the turn's replies is still waiting, it counts as the answer, and if
+  it then fails for good, its row in `listOutbox` shows it. A follow-up that
+  cuts an answer in several parts short cancels the parts not sent yet, and
+  the next turn answers the message again, so its beginning can reach the user
+  twice.
 
 ## Sending
 

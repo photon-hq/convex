@@ -548,20 +548,36 @@ describe("reactions", () => {
 
   it("does not spend inherited messages; a text reply does", async () => {
     const t = setup();
-    stubApi(json(202, dispatched()));
+    stubApi(
+      json(202, dispatched({ content: reaction })),
+      json(202, dispatched())
+    );
     await startTurn(t, collapse("m1"));
-    const turnId = await startTurn(t, collapse("m2"));
+    const second = await startTurn(t, collapse("m2"));
     const carried = async () =>
-      await t.run(async (ctx) => await ctx.db.query("carried").collect());
-    expect(await carried()).toHaveLength(1);
+      (await t.run(async (ctx) => await ctx.db.query("carried").collect()))
+        .map((row) => row.messageId)
+        .sort();
 
-    await queue(t, { turnId, ...react });
+    // The reaction went out, yet m3's turn still inherits m1 and m2.
+    await queue(t, { turnId: second, ...react });
     await settle(t);
-    expect(await carried()).toHaveLength(1);
+    await t.mutation(api.pipeline.completeTurn, {
+      spaceId: SPACE_ID,
+      turnId: second,
+    });
+    const third = await startTurn(t, collapse("m3"));
+    expect(await carried()).toEqual(["m1", "m2"]);
 
-    await queue(t, { turnId, content: text });
+    // A text reply went out, so m4's turn inherits nothing.
+    await queue(t, { turnId: third, content: text });
     await settle(t);
-    expect(await carried()).toHaveLength(0);
+    await t.mutation(api.pipeline.completeTurn, {
+      spaceId: SPACE_ID,
+      turnId: third,
+    });
+    await startTurn(t, collapse("m4"));
+    expect(await carried()).toEqual([]);
   });
 
   /** How long after it was queued each row's `claim` is scheduled to run. */
