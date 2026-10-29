@@ -117,7 +117,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       isCancelled: FunctionReference<
         "query",
         "internal",
-        { spaceId: string; turnId: string },
+        { turnId: string },
         boolean,
         Name
       >;

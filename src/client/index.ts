@@ -53,24 +53,6 @@ export interface StoredMessage {
   status: string;
 }
 
-/**
- * Narrow a turn reference down to exactly the fields the component's
- * validators accept.
- *
- * Handlers are naturally called as `photon.isCancelled(ctx, args)` where
- * `args` is the whole turn — including `messages` and `carried`. Convex
- * rejects extra fields, so passing that through verbatim throws
- * `ArgumentValidationError`. Narrowing here keeps the ergonomic call working
- * instead of pushing the destructuring onto every caller.
- */
-export const pickTurn = (ref: {
-  spaceId: string;
-  turnId: string;
-}): { spaceId: string; turnId: string } => ({
-  spaceId: ref.spaceId,
-  turnId: ref.turnId,
-});
-
 // Convenient types for `ctx` args, that only include the bare minimum.
 type QueryCtx = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
 type MutationCtx = Pick<
@@ -255,12 +237,11 @@ export class PhotonComponent {
    */
   async isCancelled(
     ctx: QueryCtx | MutationCtx | ActionCtx,
-    args: { spaceId: string; turnId: string }
+    args: { turnId: string }
   ): Promise<boolean> {
-    return await ctx.runQuery(
-      this.component.pipeline.isCancelled,
-      pickTurn(args)
-    );
+    return await ctx.runQuery(this.component.pipeline.isCancelled, {
+      turnId: args.turnId,
+    });
   }
 
   /**
@@ -312,7 +293,10 @@ export class PhotonComponent {
     ctx: MutationCtx | ActionCtx,
     args: { spaceId: string; turnId: string }
   ): Promise<void> {
-    await ctx.runMutation(this.component.pipeline.completeTurn, pickTurn(args));
+    await ctx.runMutation(this.component.pipeline.completeTurn, {
+      spaceId: args.spaceId,
+      turnId: args.turnId,
+    });
   }
 
   /** Routing record for a space (`senderId`, `kind`), or `null`. */

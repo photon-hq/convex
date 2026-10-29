@@ -202,7 +202,8 @@ describe("parseWebhook: event", () => {
 
 describe("the webhook route", () => {
   // The example app is the host: it mounts `registerRoutes` and answers each
-  // turn with `markMessageRead` and `sendMessage`.
+  // turn with `markMessageRead` and `sendMessage`, then `completeTurn`. Its
+  // handler hands the client the whole turn, as apps do.
   const exampleModules = import.meta.glob("../example/convex/**/*.*s");
   const componentModules = import.meta.glob("../src/component/**/*.ts");
 
@@ -365,6 +366,13 @@ describe("the webhook route", () => {
 
     expect(await stored(t)).toHaveLength(1);
     expect(sends()).toHaveLength(1);
+  });
+
+  it("marks a message handled once the handler completes its turn", async () => {
+    const t = setup();
+    await deliver(t, event(receivedMessage()));
+    await settle(t);
+    expect((await stored(t))[0]?.status).toBe("handled");
   });
 
   it("answers 500 when no webhook secret is configured", async () => {

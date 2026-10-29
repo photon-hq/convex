@@ -352,7 +352,7 @@ export const flush = internalMutation({
  * cannot stop an action that is already running.
  */
 export const isCancelled = query({
-  args: { spaceId: v.string(), turnId: v.id("turns") },
+  args: { turnId: v.id("turns") },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const record = await ctx.db.get("turns", args.turnId);

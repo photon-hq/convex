@@ -271,7 +271,6 @@ describe("cancellation and carry-forward", () => {
 
     expect(
       await t.query(api.pipeline.isCancelled, {
-        spaceId: "chat-1",
         turnId: turnId as Id<"turns">,
       })
     ).toBe(false);
@@ -280,7 +279,6 @@ describe("cancellation and carry-forward", () => {
 
     expect(
       await t.query(api.pipeline.isCancelled, {
-        spaceId: "chat-1",
         turnId: turnId as Id<"turns">,
       })
     ).toBe(true);
@@ -293,9 +291,7 @@ describe("cancellation and carry-forward", () => {
       await ctx.db.delete("turns", id);
       return id;
     });
-    expect(
-      await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
-    ).toBe(true);
+    expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(true);
   });
 });
 
@@ -518,9 +514,7 @@ describe("signals do not drive turns", () => {
     // A receipt for the bot's own reply lands while the turn is still open.
     await t.mutation(api.inbound.enqueue, readReceipt("r1"));
 
-    expect(
-      await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
-    ).toBe(false);
+    expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(false);
   });
 });
 
@@ -895,9 +889,7 @@ describe("concurrent immediate turns stay independent", () => {
 
     for (const id of ["m1", "m2", "m3"]) {
       const turnId = await turnOf(id);
-      expect(
-        await t.query(api.pipeline.isCancelled, { spaceId: "chat-1", turnId })
-      ).toBe(false);
+      expect(await t.query(api.pipeline.isCancelled, { turnId })).toBe(false);
 
       const queued = await t.mutation(api.outbox.enqueue, {
         spaceId: "chat-1",
