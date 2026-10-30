@@ -319,18 +319,6 @@ export const settle = internalMutation({
         sentAt: Date.now(),
         ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
       });
-
-      // A reply went out, so the turn's inherited messages are spent. Until
-      // then, the next turn could still need them.
-      if (isReply(row) && row.turnId) {
-        const inherited = await ctx.db
-          .query("carried")
-          .withIndex("by_turnId", (q) => q.eq("turnId", row.turnId))
-          .collect();
-        for (const spent of inherited) {
-          await ctx.db.delete("carried", spent._id);
-        }
-      }
       await sendNextReply(ctx, row);
       return null;
     }

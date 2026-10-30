@@ -190,7 +190,7 @@ describe("cancellation and carry-forward", () => {
     expect(carried[0]?.turnId).toBeDefined();
   });
 
-  it("keeps carried messages until a reply actually ships", async () => {
+  it("keeps carried messages until the turn that inherited them has answered", async () => {
     const t = setup();
     await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
     await settle(t);
@@ -221,7 +221,9 @@ describe("cancellation and carry-forward", () => {
       ok: true,
     });
 
-    // The reply reached the user, so the turn's messages are finally spent.
+    // The reply reached the user, so the next message finds the turn's
+    // messages spent.
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
     carried = await t.run(
       async (ctx) => await ctx.db.query("carried").collect()
     );
@@ -517,7 +519,7 @@ describe("no debounce: cancellation collapses bursts instead of waiting", () => 
   });
 });
 
-describe("a message is answered only when its reply actually ships", () => {
+describe("a message is answered only once its answer has gone out", () => {
   const queueReply = async (
     t: ReturnType<typeof setup>,
     turnId: Id<"turns">,
@@ -628,6 +630,73 @@ describe("a message is answered only when its reply actually ships", () => {
     const turnId = await inheritingTurn(t);
     await replyInFlight(t, turnId);
     // No completeTurn: the handler was still running when m3 arrived.
+
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
+    await settle(t);
+
+    const nextTurn = await currentTurn(t);
+    const carried = await t.run(
+      async (ctx) => await ctx.db.query("carried").collect()
+    );
+    expect(carried.map((row) => [row.messageId, row.turnId])).toEqual([
+      ["m1", nextTurn],
+      ["m2", nextTurn],
+    ]);
+  });
+
+  /** Queue the turn's answer in parts; the first one reaches the user. */
+  const firstPartSent = async (
+    t: ReturnType<typeof setup>,
+    turnId: Id<"turns">,
+    parts: number
+  ) => {
+    const ids: Id<"outbox">[] = [];
+    for (let part = 1; part <= parts; part++) {
+      const queued = await queueReply(t, turnId, `part ${part}`);
+      ids.push(queued.idempotencyKey as Id<"outbox">);
+    }
+    await t.mutation(internal.outbox.settle, {
+      rowId: ids[0] as Id<"outbox">,
+      ok: true,
+    });
+    return ids;
+  };
+
+  it("answers a message again when a follow-up cuts its answer short", async () => {
+    const t = setup();
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m1" }));
+    await settle(t);
+    const turnId = await currentTurn(t);
+    const parts = await firstPartSent(t, turnId, 3);
+    await t.mutation(api.pipeline.completeTurn, {
+      spaceId: "chat-1",
+      turnId,
+    });
+
+    await t.mutation(api.inbound.enqueue, message({ messageId: "m2" }));
+
+    // Parts 2 and 3 will never go out, so m1 has not been answered.
+    const statuses = await t.run(
+      async (ctx) =>
+        await Promise.all(
+          parts.map(async (id) => (await ctx.db.get("outbox", id))?.status)
+        )
+    );
+    expect(statuses).toEqual(["sent", "cancelled", "cancelled"]);
+    const carried = await t.run(
+      async (ctx) => await ctx.db.query("carried").collect()
+    );
+    expect(carried.map((c) => c.messageId)).toEqual(["m1"]);
+  });
+
+  it("hands inherited messages on when a follow-up cuts the answer short", async () => {
+    const t = setup();
+    const turnId = await inheritingTurn(t);
+    await firstPartSent(t, turnId, 2);
+    await t.mutation(api.pipeline.completeTurn, {
+      spaceId: "chat-1",
+      turnId,
+    });
 
     await t.mutation(api.inbound.enqueue, message({ messageId: "m3" }));
     await settle(t);

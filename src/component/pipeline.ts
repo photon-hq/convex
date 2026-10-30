@@ -142,17 +142,20 @@ export const cancelCurrentTurn = async (
 
   const turnId = inflight.turnId;
   if (turnId) {
-    // A turn counts as answered once the API accepted a reply, or a reply is
-    // already going out: a request in flight can't be recalled, and
-    // `cancelQueuedSends` leaves it to finish, with its retries.
+    // A turn counts as answered once its answer has gone out: a reply was
+    // accepted or is going out, and none is still waiting. A request in flight
+    // can't be recalled, and `cancelQueuedSends` leaves it to finish, with its
+    // retries; a reply still waiting is cancelled, so an answer cut short is
+    // answered again by the next turn.
     const queued = await ctx.db
       .query("outbox")
       .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
       .collect();
-    const answered = queued.some(
-      (row) =>
-        (row.status === "sent" || row.status === "sending") && isReply(row)
-    );
+    const replies = queued.filter(isReply);
+    const answered =
+      replies.some(
+        (row) => row.status === "sent" || row.status === "sending"
+      ) && replies.every((row) => row.status !== "pending");
     const drained = await ctx.db
       .query("inbound")
       .withIndex("by_turnId", (q) => q.eq("turnId", turnId))
@@ -307,8 +310,8 @@ export const completeTurn = mutation({
         await ctx.db.patch("inbound", row._id, { status: "handled" as const });
       }
     }
-    // Inherited messages stay until a reply actually ships (`outbox.settle`):
-    // so far the reply is only queued, and a supersession can still cancel it.
+    // Inherited messages stay claimed: the reply is only queued so far, and
+    // `cancelCurrentTurn` settles them with the turn's own messages.
 
     const inflight = await getInflight(ctx, args.spaceId);
     if (inflight?.turnId === args.turnId) {

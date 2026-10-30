@@ -151,6 +151,17 @@ A turn's replies go out one at a time, in the order they were queued, each
 after the first at least `pacingMs` after the one before it. Read receipts and
 reactions are never held back or delayed, and don't count as replies.
 
+In collapse mode, a message also stays recoverable until its answer has gone
+out. It is not spent when it is drained, and not when the handler returns: a
+handler that has finished may only have *queued* its replies, and a follow-up
+moments later can still cancel them and carry the message into the next turn.
+A reply that is already going out can't be recalled, so it is finished, with
+retries; once none of the turn's replies is still waiting, it counts as the
+answer, and if it then fails for good, its row in `listOutbox` shows it. A
+follow-up that cuts an answer in several parts short cancels the parts still
+waiting, and the next turn gets the message again in `carried`, so the
+beginning of the answer can reach the user twice.
+
 Replies of different turns are not ordered against each other. In immediate
 mode every message is its own turn, and turns can run at the same time, so
 replies to messages that arrive close together can go out in a different order
@@ -168,12 +179,6 @@ mode.
   across its retries, and `sendMessage` and `markMessageRead` send it as the
   request's `idempotency-key` header. A retry after a lost response gets the
   original result back instead of sending the message a second time.
-- **A message stays recoverable until a reply to it goes out.** It is not spent
-  when it is drained, and not when the handler returns: a handler that has
-  finished has only *queued* its reply, and a follow-up moments later can still
-  cancel it and carry the message into the next turn. A reply that is already
-  going out can't be recalled, so it is finished, with retries, and counts as
-  the answer; if it then fails for good, its row in `listOutbox` shows it.
 
 ## Sending
 

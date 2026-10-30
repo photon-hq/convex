@@ -107,8 +107,9 @@ export default defineSchema({
 
   /**
    * Messages a cancelled turn had drained, which the next turn gets as
-   * `carried`. The flush that hands them on claims them (sets `turnId`); they
-   * are deleted once a reply to them goes out.
+   * `carried`. The flush that hands them on claims them (sets `turnId`). When
+   * the next message supersedes that turn, they are deleted if it answered
+   * and completed, and handed on otherwise.
    */
   carried: defineTable({
     spaceId: v.string(),
