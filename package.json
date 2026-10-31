@@ -64,7 +64,7 @@
     "prepare": "pnpm run build"
   },
   "dependencies": {
-    "@photon-ai/api": "^0.6.0",
+    "@photon-ai/api": "0.6.0",
     "standardwebhooks": "^1.1.1"
   },
   "peerDependencies": {
