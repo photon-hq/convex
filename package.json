@@ -6,7 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/photon-hq/convex.git"
   },
-  "homepage": "https://photon.codes/docs/beta/cookbooks/convex",
+  "homepage": "https://github.com/photon-hq/convex#readme",
   "bugs": {
     "url": "https://github.com/photon-hq/convex/issues"
   },
