@@ -101,7 +101,7 @@ export interface PhotonComponentOptions {
   onTurn?: FunctionReference<"action" | "mutation", "internal" | "public">;
   /**
    * Gap between a turn's replies, which go out one at a time in the order they
-   * were queued. Read receipts and reactions are never delayed.
+   * were queued. Read receipts, reactions and deletions are never delayed.
    */
   pacingMs?: number;
   /** Photon project id (`pho_prj_…`). Falls back to `process.env.PHOTON_PROJECT_ID`. */

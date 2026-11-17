@@ -32,14 +32,21 @@ export type TurnHandler = FunctionHandle<
 >;
 
 /**
- * Whether an outbox row is a reply to its turn. A reaction is not: it
- * acknowledges a message rather than replying to it.
+ * Content an outbox row can send that does not reply to its turn: a reaction
+ * acknowledges a message, and `message.delete` takes a message or a reaction
+ * back.
  */
+const NOT_REPLIES: ReadonlySet<unknown> = new Set([
+  "reaction",
+  "message.delete",
+]);
+
+/** Whether an outbox row is a reply to its turn. */
 export const isReply = (
   row: Pick<Doc<"outbox">, "kind" | "content">
 ): boolean =>
   row.kind === "sendMessage" &&
-  (row.content as { type?: unknown } | undefined)?.type !== "reaction";
+  !NOT_REPLIES.has((row.content as { type?: unknown } | undefined)?.type);
 
 const getInflight = async (
   ctx: MutationCtx,

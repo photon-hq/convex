@@ -148,8 +148,9 @@ of a turn that never completes are carried into the next turn even if it
 replied.
 
 A turn's replies go out one at a time, in the order they were queued, each
-after the first at least `pacingMs` after the one before it. Read receipts and
-reactions are never held back or delayed, and don't count as replies.
+after the first at least `pacingMs` after the one before it. Read receipts,
+reactions and deletions (`message.delete`) are never held back or delayed, and
+don't count as replies.
 
 In collapse mode, a message also stays recoverable until its answer has gone
 out. It is not spent when it is drained, and not when the handler returns: a
@@ -192,6 +193,11 @@ to the deployment's dashboard can read the API key**.
 | `photon.sendMessage(ctx, { spaceId, content, turnId?, parentMessageId?, email?, telegram?, pacingMs? })` | `sendMessage` — `content` is the API's send content, e.g. `{ type: "text", format: "plain", text }` or `format: "markdown"`. `parentMessageId` makes it a reply; `email` and `telegram` are the platform options. |
 | `photon.markMessageRead(ctx, { spaceId, turnId })` | `markMessageRead` on the turn's newest message |
 | `photon.setSpaceTyping(ctx, { spaceId, turnId? })` | `setSpaceTyping` (typing on) |
+
+A reaction is `{ type: "reaction", reaction: "👍" }`, with `parentMessageId`
+set to the message it reacts to. To take a reaction back, send
+`{ type: "message.delete" }` with `parentMessageId` set to the reaction's own
+message, the `messageId` of its row in `listOutbox`.
 
 Replies are sent as the agent's own user in the space — the `receivedBy` of the
 incoming messages. A space that has never received a message with `receivedBy`

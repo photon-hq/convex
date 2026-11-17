@@ -286,20 +286,13 @@ describe("responses", () => {
   });
 
   it("reads a Message the client cannot recognise from raw", async () => {
-    // Telegram typing comes back as `space.typing.update`, which 0.6.0's
-    // Telegram content does not include: the client wraps it as UNKNOWN.
+    // A Telegram reaction comes back as `reaction`, which 0.7.0's Telegram
+    // content does not include: the client wraps it as UNKNOWN.
+    const reaction = { type: "reaction", reaction: "👍" };
     const t = setup();
-    stubApi(
-      json(
-        202,
-        dispatched({
-          platform: "telegram",
-          content: { type: "space.typing.update", typing: true },
-        })
-      )
-    );
+    stubApi(json(202, dispatched({ platform: "telegram", content: reaction })));
     const turnId = await startTurn(t, { platform: "telegram" });
-    await queue(t, { turnId, kind: "setSpaceTyping" });
+    await queue(t, { turnId, content: reaction, parentMessageId: MESSAGE_ID });
     await settle(t);
 
     expect((await outbox(t))[0]).toMatchObject({
@@ -310,12 +303,9 @@ describe("responses", () => {
   });
 
   it("fails an unrecognised Message whose raw status is failed", async () => {
-    // A reaction is not iMessage content in 0.6.0, so this one is wrapped too.
+    // A reaction is not iMessage content in 0.7.0, so this one is wrapped too.
     const { rows } = await sendOnce(
-      json(
-        202,
-        failed({ content: { type: "reaction", action: "add", reaction: "👍" } })
-      )
+      json(202, failed({ content: { type: "reaction", reaction: "👍" } }))
     );
     expect(rows[0]).toMatchObject({ status: "failed", attempts: 1 });
   });
@@ -523,14 +513,27 @@ describe("credentials", () => {
   });
 });
 
-describe("reactions", () => {
-  const reaction = { type: "reaction", action: "add", reaction: "👍" };
-
-  const react = { content: reaction, parentMessageId: MESSAGE_ID };
-
+describe.each([
+  [
+    "a reaction",
+    {
+      content: { type: "reaction", reaction: "👍" },
+      parentMessageId: MESSAGE_ID,
+    },
+  ],
+  [
+    // 0.7.0 takes a reaction back with `message.delete` on the reaction's own
+    // message, where 0.6.0 sent the reaction again with `action: "remove"`.
+    "taking a reaction back",
+    {
+      content: { type: "message.delete" },
+      parentMessageId: "pho_msg_00000000000000000000000003",
+    },
+  ],
+])("%s", (_, react) => {
   it("does not answer the turn, so a superseded turn carries its messages", async () => {
     const t = setup();
-    stubApi(json(202, dispatched({ content: reaction })));
+    stubApi(json(202, dispatched({ content: react.content })));
     const turnId = await startTurn(t, collapse("m1"));
 
     await queue(t, { turnId, ...react });
@@ -549,7 +552,7 @@ describe("reactions", () => {
   it("does not spend inherited messages; a text reply does", async () => {
     const t = setup();
     stubApi(
-      json(202, dispatched({ content: reaction })),
+      json(202, dispatched({ content: react.content })),
       json(202, dispatched())
     );
     await startTurn(t, collapse("m1"));
@@ -559,7 +562,7 @@ describe("reactions", () => {
         .map((row) => row.messageId)
         .sort();
 
-    // The reaction went out, yet m3's turn still inherits m1 and m2.
+    // It went out, yet m3's turn still inherits m1 and m2.
     await queue(t, { turnId: second, ...react });
     await settle(t);
     await t.mutation(api.pipeline.completeTurn, {
@@ -603,8 +606,8 @@ describe("reactions", () => {
     await queue(t, { turnId, ...react, pacingMs: 800 });
     await queue(t, { turnId, content: text, pacingMs: 800 });
 
-    // The first text and the reaction go at once; the second text waits for
-    // the first to settle.
+    // The first text and this one go at once; the second text waits for the
+    // first to settle.
     expect(await claimDelays(t)).toEqual([0, 0]);
   });
 
