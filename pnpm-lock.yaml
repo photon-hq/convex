@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@photon-ai/api':
-        specifier: 0.6.0
-        version: 0.6.0
+        specifier: 0.7.0
+        version: 0.7.0
       standardwebhooks:
         specifier: ^1.1.1
         version: 1.1.1
@@ -283,8 +283,8 @@ packages:
   '@oxc-project/types@0.146.0':
     resolution: {integrity: sha512-XC0QsnnhVe7sLIWmYmdPw7x5P0h4W8vUU3Nv1ySgWXtvCz8NizoAEpGXA0sOYoJQV2Rl13LgURAHQ5cI5ILCSA==}
 
-  '@photon-ai/api@0.6.0':
-    resolution: {integrity: sha512-DrxAUpwFwcybx/pUD5OzMWzR6pvARvbwBd+9HwMHEXQXdTYGZo1RLg5t8XQLSiVM2WTR7BCjZV1+cFtT+qsZNw==}
+  '@photon-ai/api@0.7.0':
+    resolution: {integrity: sha512-K7OhGmdtQV4t4f9aJUelMsMFoil5n/FLHEwLC1jHUST0XRQytoD6BHkva0czz3KOQAkDIbpM0BuczAn9gRdWSw==}
     engines: {node: '>=22'}
 
   '@rolldown/binding-android-arm-eabi@1.2.5':
@@ -1155,8 +1155,9 @@ snapshots:
 
   '@oxc-project/types@0.146.0': {}
 
-  '@photon-ai/api@0.6.0':
+  '@photon-ai/api@0.7.0':
     dependencies:
+      standardwebhooks: 1.1.1
       zod: 4.6.7
 
   '@rolldown/binding-android-arm-eabi@1.2.5':

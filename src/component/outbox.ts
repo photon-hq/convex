@@ -63,7 +63,7 @@ const saveConfig = async (
 /**
  * Schedule a new row's claim. A reply queued behind one that has not settled
  * waits instead, keeping its `pacingMs` for `sendNextReply`. Read receipts,
- * typing and reactions are never held back.
+ * typing, reactions and deletions are never held back.
  */
 const scheduleClaim = async (
   ctx: MutationCtx,
